@@ -31,6 +31,12 @@ def build_df_from_api():
         rows.append({
             "id": extract(fields, "matrix_id"),
             "title": extract(fields, "title"),
-            "body": extract(fields, "body")
+            "body": extract(fields, "body"),
+            "level": extract(fields, "level"),
+            "parent_id": extract(fields, "parent_id"),
+            "parent_name": extract(fields, "parent_name"),
+            "child_id": extract(fields, "child_id")
         })
     return pd.DataFrame(rows)
+
+
