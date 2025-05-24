@@ -50,3 +50,7 @@ def generate_matrix():
     return StreamingResponse(zip_buf, media_type="application/zip", headers={
         "Content-Disposition": "attachment; filename=Matrix.zip"
     })
+# ⬇️ Автоматический запуск с учётом переменной PORT от Render
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
