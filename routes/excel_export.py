@@ -7,12 +7,13 @@ import io
 router = APIRouter()
 
 @router.get("/excel")
-def export_excel():
+def get_excel():
     df = build_df_from_api()
-    xlsx_buf = io.BytesIO()
-    with pd.ExcelWriter(xlsx_buf, engine="openpyxl") as writer:
+    df = df[["id", "title", "body", "level", "parent_id", "parent_name", "child_id"]]
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False)
-    xlsx_buf.seek(0)
-    return StreamingResponse(xlsx_buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={
-        "Content-Disposition": "attachment; filename=Matrix.xlsx"
+    output.seek(0)
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={
+        "Content-Disposition": "attachment; filename=matrix.xlsx"
     })
