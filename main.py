@@ -42,12 +42,21 @@ def generate_matrix():
 
     zip_buf = io.BytesIO()
     with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zipf:
+        # Matrix_md/*.md
         for _, row in df.iterrows():
             md_content = f"# {row['title']}\n\n**id:** {row['id']}\n\n{row['body']}\n"
             zipf.writestr(f"Matrix_md/{row['id']}.md", md_content)
 
-        full_md = "\n\n".join(
+        # Matrix_clean_id.md
+        clean_md = "\n\n".join(
             f"# {row['title']}\n\n**id:** {row['id']}\n\n{row['body']}\n\n---"
+            for _, row in df.iterrows()
+        )
+        zipf.writestr("Matrix_clean_id.md", clean_md)
+
+        # Matrix_full.md (с мета-блоками)
+        full_md = "\n\n".join(
+            f"# {row['title']}\n\n<!-- METADATA -->\nmeta:\n  id: {row['id']}\n  title: {row['title']}\n  linked: []\n\n{row['body']}\n\n---"
             for _, row in df.iterrows()
         )
         zipf.writestr("Matrix_full.md", full_md)
