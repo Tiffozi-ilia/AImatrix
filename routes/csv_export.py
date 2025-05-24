@@ -6,10 +6,11 @@ import io
 router = APIRouter()
 
 @router.get("/csv")
-def export_csv():
+def get_csv():
     df = build_df_from_api()
-    csv_buf = io.StringIO()
-    df.to_csv(csv_buf, index=False)
-    return StreamingResponse(io.BytesIO(csv_buf.getvalue().encode()), media_type="text/csv", headers={
-        "Content-Disposition": "attachment; filename=Matrix.csv"
+    df = df[["id", "title", "body", "level", "parent_id", "parent_name", "child_id"]]
+    csv_stream = io.StringIO()
+    df.to_csv(csv_stream, index=False)
+    return StreamingResponse(io.BytesIO(csv_stream.getvalue().encode("utf-8")), media_type="text/csv", headers={
+        "Content-Disposition": "attachment; filename=matrix.csv"
     })
