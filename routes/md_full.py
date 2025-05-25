@@ -1,6 +1,8 @@
 from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 from utils.data_loader import build_df_from_api
+import yaml
+import pandas as pd
 
 router = APIRouter()
 
