@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-from utils.data_loader import get_raw_data
+from utils.data_loader import get_data
 import json
 import io
 
