@@ -15,3 +15,4 @@ def export_json():
         buffer,
         media_type="application/json",
         headers={"Content-Disposition": "attachment; filename=matrix_raw.json"}
+    )
