@@ -29,7 +29,11 @@ def get_excel():
         level_formula = f'=LEN(A{row_idx})-LEN(SUBSTITUTE(A{row_idx},".",""))+1'
         parent_id_formula = f'=IF(B{row_idx}=1,"",LEFT(A{row_idx},FIND("|",SUBSTITUTE(A{row_idx},".","|",B{row_idx}-1))-1))'
         parent_name_formula = f'=IF(C{row_idx}="", "", IFERROR(INDEX(D:D, MATCH(C{row_idx}, A:A, 0)), ""))'
-        child_id_formula = f'=IFERROR(TEXTJOIN(" | ", TRUE, FILTER(A:A, LEFT(A:A, LEN(A{row_idx})+1)=A{row_idx}&".")), "")'
+        child_id_formula = (
+        f'=IFERROR('
+        f'TEXTJOIN(" | ", TRUE, '
+        f'FILTER(A:A, LEFT(A:A, LEN(A{row_idx})+1)=A{row_idx}&".")), "")'
+        )
 
         ws.append([
             id_val,
