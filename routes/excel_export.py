@@ -10,7 +10,7 @@ router = APIRouter()
 @router.get("/excel")
 def get_excel():
     df = build_df_from_api()
-    df = df.sort_values(by="id")
+    df = df.sort_values(by="id").reset_index(drop=True)
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "MKmax"
