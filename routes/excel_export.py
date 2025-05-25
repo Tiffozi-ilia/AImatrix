@@ -28,7 +28,7 @@ def get_excel():
         # Формулы с разделителем ";" для локали RU
         level_formula = f'=LEN(A{row_idx})-LEN(SUBSTITUTE(A{row_idx},".",""))+1'
         parent_id_formula = f'=IF(B{row_idx}=1,"",LEFT(A{row_idx},FIND("|",SUBSTITUTE(A{row_idx},".","|",B{row_idx}-1))-1))'
-        parent_name_formula = f'=IF(C{row_idx}="", "", IFERROR(INDEX(D:D, MATCH(C{row_idx}, A:A, 0)), ""))'
+        parent_name_formula = f'=IF(C{row_idx}="", "", IFERROR(INDEX(D:D, MATCH(E{row_idx}, A:A, 0)), ""))'
         child_id_formula = (
         f'=TEXTJOIN(", ", TRUE, FILTER(A:A, '
         f'(A:A<>"") * '
