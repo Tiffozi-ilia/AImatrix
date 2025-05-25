@@ -10,7 +10,7 @@ router = APIRouter()
 @router.get("/excel")
 def get_excel():
     df = build_df_from_api()
-
+    df = df.sort_values(by="id")
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "MKmax"
@@ -29,15 +29,7 @@ def get_excel():
         level_formula = f'=LEN(A{row_idx})-LEN(SUBSTITUTE(A{row_idx},".",""))+1'
         parent_id_formula = f'=IF(B{row_idx}=1,"",LEFT(A{row_idx},FIND("|",SUBSTITUTE(A{row_idx},".","|",B{row_idx}-1))-1))'
         parent_name_formula = f'=IF(C{row_idx}="", "", IFERROR(INDEX(D:D, MATCH(E{row_idx}, A:A, 0)), ""))'
-        child_id_formula = (
-        f'=TEXTJOIN(", ", TRUE, FILTER(A:A, '
-        f'(A:A<>"") * '
-        f'(LEFT(A:A, LEN(TRIM(LEFT(A{row_idx}, IFERROR(FIND("-", A{row_idx})-1, LEN(A{row_idx}))))) + 1) = '
-        f'TRIM(LEFT(A{row_idx}, IFERROR(FIND("-", A{row_idx})-1, LEN(A{row_idx})))) & ".") * '
-        f'((LEN(A:A) - LEN(SUBSTITUTE(A:A, ".", ""))) = '
-        f'(LEN(TRIM(LEFT(A{row_idx}, IFERROR(FIND("-", A{row_idx})-1, LEN(A{row_idx})))))) - '
-        f'LEN(SUBSTITUTE(TRIM(LEFT(A{row_idx}, IFERROR(FIND("-", A{row_idx})-1, LEN(A{row_idx})))), ".", "")) + 1), '
-        f'"-"))'
+        child_id_formula = (f'=TEXTJOIN(" | ", TRUE, FILTER(A:A, LEFT(A:A, LEN(A{row_idx})+1) = A{row_idx} & "."))'
         )
 
         ws.append([
