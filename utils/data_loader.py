@@ -35,6 +35,6 @@ def build_df_from_api():
             "level": extract(fields, "level"),
             "parent_id": extract(fields, "parent_id"),
             "parent_name": extract(fields, "parent_name"),
-            "child_id": extract(fields, "child_id"),
+            "child_id": extract(fields, "child_id")
         })
     return pd.DataFrame(rows)
