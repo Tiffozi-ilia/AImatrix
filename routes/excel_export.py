@@ -30,9 +30,14 @@ def get_excel():
         parent_id_formula = f'=IF(B{row_idx}=1,"",LEFT(A{row_idx},FIND("|",SUBSTITUTE(A{row_idx},".","|",B{row_idx}-1))-1))'
         parent_name_formula = f'=IF(C{row_idx}="", "", IFERROR(INDEX(D:D, MATCH(C{row_idx}, A:A, 0)), ""))'
         child_id_formula = (
-        f'=IFERROR('
-        f'TEXTJOIN(" | ", TRUE, '
-        f'FILTER(A:A, LEFT(A:A, LEN(A{row_idx})+1)=A{row_idx}&".")), "")'
+        f'=TEXTJOIN(", ", TRUE, FILTER(A:A, '
+        f'(A:A<>"") * '
+        f'(LEFT(A:A, LEN(TRIM(LEFT(A{row_idx}, IFERROR(FIND("-", A{row_idx})-1, LEN(A{row_idx}))))) + 1) = '
+        f'TRIM(LEFT(A{row_idx}, IFERROR(FIND("-", A{row_idx})-1, LEN(A{row_idx})))) & ".") * '
+        f'((LEN(A:A) - LEN(SUBSTITUTE(A:A, ".", ""))) = '
+        f'(LEN(TRIM(LEFT(A{row_idx}, IFERROR(FIND("-", A{row_idx})-1, LEN(A{row_idx})))))) - '
+        f'LEN(SUBSTITUTE(TRIM(LEFT(A{row_idx}, IFERROR(FIND("-", A{row_idx})-1, LEN(A{row_idx})))), ".", "")) + 1), '
+        f'"-"))'
         )
 
         ws.append([
