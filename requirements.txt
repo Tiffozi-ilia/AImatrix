@@ -3,3 +3,4 @@ uvicorn
 pandas
 requests
 pyyaml
+openpyxl>=3.1.0
