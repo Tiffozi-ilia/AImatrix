@@ -31,7 +31,6 @@ def export_xmind():
 
     node_map = {}
 
-    # Шаг 1 — создаём узлы
     for _, row in df.iterrows():
         node_id = generate_id()
         node = {
@@ -40,14 +39,13 @@ def export_xmind():
             "structureClass": "org.xmind.ui.logic.right",
             "topics": [],
             "properties": {
-                "label": f"{row['id']}|{row.get('level', '')}|{row.get('parent_id', '')}|{row.get('parent_name', '')}|{row.get('child_id', '')}"
+                "label": f"{row['id']}|{row.get('level','')}|{row.get('parent_id','')}|{row.get('parent_name','')}|{row.get('child_id','')}"
             }
         }
         if row["body"]:
             node["notes"] = {"plain": row["body"]}
         node_map[row["id"]] = node
 
-    # Шаг 2 — выстраиваем иерархию
     for _, row in df.iterrows():
         parent_id = row["parent_id"]
         if parent_id and parent_id in node_map:
@@ -60,9 +58,10 @@ def export_xmind():
         "topics": []
     })
 
-    # ❗ content.json должен быть списком
+    # ОБЯЗАТЕЛЬНО: список и title
     content = [{
         "id": generate_id(),
+        "title": "Almatrix",
         "rootTopic": root_topic
     }]
 
