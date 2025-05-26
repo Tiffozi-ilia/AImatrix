@@ -13,7 +13,7 @@ router = APIRouter()
 def generate_id():
     return str(uuid.uuid4())
 
-@xmind_export.get("/xmind")
+@router.get("/xmind")
 def export_xmind():
     df = build_df_from_api()
     df = df.sort_values(by="id")
