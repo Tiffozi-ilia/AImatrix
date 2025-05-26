@@ -1,101 +1,100 @@
-# Реализация финального скрипта в виде отдельного xmind_export.py-модуля, использующего формат notes.plain.content и labels
+import pandas as pd
+import json
+import io
+import zipfile
+import time
+import uuid
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-import io
-import json
-import zipfile
-import uuid
-import time
+from utils.data_loader import build_df_from_api
 
-xmind_export = APIRouter()
+router = APIRouter()
 
 def generate_id():
     return str(uuid.uuid4())
 
-@xmind_export.get("/xmind")
-def export_xmind():
-    buffer = io.BytesIO()
-
-    # Фиксированные ID
-    sheet_id = generate_id()
-    root_id = "ROOT-001"
-    sub1_id = "SUB-001"
-    sub2_id = "SUB-002"
-
-    # content.json
-    content_json = [
-        {
-            "id": sheet_id,
-            "class": "sheet",
-            "title": "Карта с корректной структурой notes",
-            "rootTopic": {
-                "id": root_id,
-                "class": "topic",
-                "title": "Главная тема",
-                "labels": [f"{root_id}|0|||"],
-                "notes": {
-                    "plain": {
-                        "content": "Это заметка к главной теме. Она сохранена в формате `notes.plain.content`."
-                    }
-                },
-                "children": {
-                    "attached": [
-                        {
-                            "id": sub1_id,
-                            "class": "topic",
-                            "title": "Первая ветка",
-                            "labels": [f"{sub1_id}|1|{root_id}|Главная тема|"],
-                            "notes": {
-                                "plain": {
-                                    "content": "Это заметка к первой ветке."
-                                }
-                            }
-                        },
-                        {
-                            "id": sub2_id,
-                            "class": "topic",
-                            "title": "Вторая ветка",
-                            "labels": [f"{sub2_id}|1|{root_id}|Главная тема|"],
-                            "notes": {
-                                "plain": {
-                                    "content": "Это заметка ко второй ветке."
-                                }
-                            }
-                        }
-                    ]
-                }
+def create_node(row):
+    node = {
+        "id": row["id"],
+        "class": "topic",
+        "title": row["title"],
+        "labels": [f"{row['id']}|{row.get('level', '')}|{row.get('parent_id', '')}|{row.get('parent_name', '')}|{row.get('child_id', '')}"]
+    }
+    if pd.notna(row.get("body")) and row["body"].strip():
+        node["notes"] = {
+            "plain": {
+                "content": row["body"]
             }
         }
-    ]
+    return node
 
-    # metadata.json
-    metadata_json = {
+@router.get("/xmind")
+def export_xmind():
+    df = build_df_from_api()
+    df = df.sort_values(by="id")
+
+    if "+" not in df["id"].values:
+        df = pd.concat([pd.DataFrame([{
+            "id": "+",
+            "title": "Корень",
+            "body": "",
+            "parent_id": "",
+            "level": "0",
+            "parent_name": "",
+            "child_id": ""
+        }]), df], ignore_index=True)
+
+    node_map = {row["id"]: create_node(row) for _, row in df.iterrows()}
+
+    for _, row in df.iterrows():
+        parent_id = row["parent_id"]
+        if parent_id and parent_id in node_map:
+            parent = node_map[parent_id]
+            if "children" not in parent:
+                parent["children"] = {"attached": []}
+            parent["children"]["attached"].append(node_map[row["id"]])
+
+    root_topic = node_map.get("+", {
+        "id": "+",
+        "class": "topic",
+        "title": "Пусто"
+    })
+
+    content = [{
+        "id": generate_id(),
+        "class": "sheet",
+        "title": "Almatrix",
+        "rootTopic": root_topic
+    }]
+
+    timestamp = int(time.time() * 1000)
+    metadata = {
         "dataStructureVersion": "2",
         "creator": {
-            "name": "ChatGPT",
-            "version": "25.05.2025"
+            "name": "Almatrix",
+            "version": "1.0"
         },
         "layoutEngineVersion": "3",
-        "activeSheetId": sheet_id,
+        "activeSheetId": content[0]["id"],
         "familyId": f"local-{str(uuid.uuid4()).replace('-', '')}"
     }
 
-    # manifest.json
-    manifest_json = {
+    manifest = {
         "file-entries": {
             "content.json": {},
             "metadata.json": {}
         }
     }
 
-    # Архивация
+    buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("content.json", json.dumps(content_json, ensure_ascii=False, indent=2))
-        zf.writestr("metadata.json", json.dumps(metadata_json, ensure_ascii=False, indent=2))
-        zf.writestr("manifest.json", json.dumps(manifest_json, ensure_ascii=False, indent=2))
+        zf.writestr("content.json", json.dumps(content, ensure_ascii=False, indent=2))
+        zf.writestr("metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2))
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
 
     buffer.seek(0)
-    return StreamingResponse(buffer, media_type="application/vnd.xmind.workbook", headers={
-        "Content-Disposition": "attachment; filename=xmind_notes_plain_labels.xmind"
-    })
-router = xmind_export
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.xmind.workbook",
+        headers={"Content-Disposition": "attachment; filename=matrix.xmind"}
+    )
