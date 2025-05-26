@@ -1,93 +1,100 @@
-import pandas as pd
-import json
-import io
-import zipfile
-import time
-import uuid
+# Реализация финального скрипта в виде отдельного xmind_export.py-модуля, использующего формат notes.plain.content и labels
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-from utils.data_loader import build_df_from_api
+import io
+import json
+import zipfile
+import uuid
+import time
 
-router = APIRouter()
+xmind_export = APIRouter()
 
 def generate_id():
     return str(uuid.uuid4())
 
-@router.get("/xmind")
+@xmind_export.get("/xmind")
 def export_xmind():
-    df = build_df_from_api()
-    df = df.sort_values(by="id")
+    buffer = io.BytesIO()
 
-    # Добавляем корень при необходимости
-    if "+" not in df["id"].values:
-        df = pd.concat([pd.DataFrame([{
-            "id": "+",
-            "title": "Корень",
-            "body": "",
-            "parent_id": "",
-            "level": "0",
-            "parent_name": "",
-            "child_id": ""
-        }]), df], ignore_index=True)
+    # Фиксированные ID
+    sheet_id = generate_id()
+    root_id = "ROOT-001"
+    sub1_id = "SUB-001"
+    sub2_id = "SUB-002"
 
-    node_map = {}
-
-    # Создание всех узлов
-    for _, row in df.iterrows():
-        node_id = generate_id()
-        node = {
-            "id": node_id,
-            "title": row["title"],
-            "structureClass": "org.xmind.ui.logic.right",
-            "topics": [],
-            "properties": {
-                "label": f"{row['id']}|{row.get('level', '')}|{row.get('parent_id', '')}|{row.get('parent_name', '')}|{row.get('child_id', '')}"
+    # content.json
+    content_json = [
+        {
+            "id": sheet_id,
+            "class": "sheet",
+            "title": "Карта с корректной структурой notes",
+            "rootTopic": {
+                "id": root_id,
+                "class": "topic",
+                "title": "Главная тема",
+                "labels": [f"{root_id}|0|||"],
+                "notes": {
+                    "plain": {
+                        "content": "Это заметка к главной теме. Она сохранена в формате `notes.plain.content`."
+                    }
+                },
+                "children": {
+                    "attached": [
+                        {
+                            "id": sub1_id,
+                            "class": "topic",
+                            "title": "Первая ветка",
+                            "labels": [f"{sub1_id}|1|{root_id}|Главная тема|"],
+                            "notes": {
+                                "plain": {
+                                    "content": "Это заметка к первой ветке."
+                                }
+                            }
+                        },
+                        {
+                            "id": sub2_id,
+                            "class": "topic",
+                            "title": "Вторая ветка",
+                            "labels": [f"{sub2_id}|1|{root_id}|Главная тема|"],
+                            "notes": {
+                                "plain": {
+                                    "content": "Это заметка ко второй ветке."
+                                }
+                            }
+                        }
+                    ]
+                }
             }
         }
-        if row["body"]:
-            node["notes"] = {"plain": row["body"]}
-        node_map[row["id"]] = node
+    ]
 
-    # Построение иерархии
-    for _, row in df.iterrows():
-        parent_id = row["parent_id"]
-        if parent_id and parent_id in node_map:
-            node_map[parent_id]["topics"].append(node_map[row["id"]])
-
-    # Корневой узел
-    root_topic = node_map.get("+", {
-        "id": generate_id(),
-        "title": "Пусто",
-        "structureClass": "org.xmind.ui.logic.right",
-        "topics": []
-    })
-
-    # content.json должен быть СПИСКОМ с обязательным title
-    content = [{
-        "id": generate_id(),
-        "title": "Almatrix",  # важно!
-        "rootTopic": root_topic
-    }]
-
-    # metadata.json — для XMind
-    timestamp = int(time.time() * 1000)
-    metadata = {
-        "creator": "Almatrix",
-        "created": timestamp,
-        "modified": timestamp,
-        "xmindVersion": "2023",
-        "platform": "windows"
+    # metadata.json
+    metadata_json = {
+        "dataStructureVersion": "2",
+        "creator": {
+            "name": "ChatGPT",
+            "version": "25.05.2025"
+        },
+        "layoutEngineVersion": "3",
+        "activeSheetId": sheet_id,
+        "familyId": f"local-{str(uuid.uuid4()).replace('-', '')}"
     }
 
-    # Сборка ZIP-файла
-    buffer = io.BytesIO()
+    # manifest.json
+    manifest_json = {
+        "file-entries": {
+            "content.json": {},
+            "metadata.json": {}
+        }
+    }
+
+    # Архивация
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("content.json", json.dumps(content, ensure_ascii=False, indent=2))
-        zf.writestr("metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2))
+        zf.writestr("content.json", json.dumps(content_json, ensure_ascii=False, indent=2))
+        zf.writestr("metadata.json", json.dumps(metadata_json, ensure_ascii=False, indent=2))
+        zf.writestr("manifest.json", json.dumps(manifest_json, ensure_ascii=False, indent=2))
 
     buffer.seek(0)
-    return StreamingResponse(
-        buffer,
-        media_type="application/vnd.xmind.workbook",
-        headers={"Content-Disposition": "attachment; filename=matrix.xmind"}
-    )
+    return StreamingResponse(buffer, media_type="application/vnd.xmind.workbook", headers={
+        "Content-Disposition": "attachment; filename=xmind_notes_plain_labels.xmind"
+    })
