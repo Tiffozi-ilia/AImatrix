@@ -1,6 +1,5 @@
 from fastapi import FastAPI
 from routes import json_export, md_full, md_clean, zip_export, csv_export, excel_export, opml_export, mm_export
-import router as mm_router
 
 app = FastAPI()
 
