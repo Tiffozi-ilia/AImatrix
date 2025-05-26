@@ -1,3 +1,4 @@
+# Реализация финального скрипта в виде отдельного xmind_export.py-модуля, использующего формат notes.plain.content и labels
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 import io
@@ -15,7 +16,7 @@ def generate_id():
 def export_xmind():
     buffer = io.BytesIO()
 
-    # Уникальные ID
+    # Фиксированные ID
     sheet_id = generate_id()
     root_id = "ROOT-001"
     sub1_id = "SUB-001"
@@ -34,7 +35,7 @@ def export_xmind():
                 "labels": [f"{root_id}|0|||"],
                 "notes": {
                     "plain": {
-                        "content": "Это заметка к главной теме. Она сохранена в формате notes.plain.content."
+                        "content": "Это заметка к главной теме. Она сохранена в формате `notes.plain.content`."
                     }
                 },
                 "children": {
@@ -71,8 +72,8 @@ def export_xmind():
     metadata_json = {
         "dataStructureVersion": "2",
         "creator": {
-            "name": "Render API",
-            "version": "1.0"
+            "name": "ChatGPT",
+            "version": "25.05.2025"
         },
         "layoutEngineVersion": "3",
         "activeSheetId": sheet_id,
@@ -87,15 +88,14 @@ def export_xmind():
         }
     }
 
-    # Архивация в .xmind
+    # Архивация
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("content.json", json.dumps(content_json, ensure_ascii=False, indent=2))
         zf.writestr("metadata.json", json.dumps(metadata_json, ensure_ascii=False, indent=2))
         zf.writestr("manifest.json", json.dumps(manifest_json, ensure_ascii=False, indent=2))
 
     buffer.seek(0)
-    return StreamingResponse(
-        buffer,
-        media_type="application/vnd.xmind.workbook",
-        headers={"Content-Disposition": "attachment; filename=xmind_notes_plain_labels.xmind"}
-    )
+    return StreamingResponse(buffer, media_type="application/vnd.xmind.workbook", headers={
+        "Content-Disposition": "attachment; filename=xmind_notes_plain_labels.xmind"
+    })
+router = xmind_export
