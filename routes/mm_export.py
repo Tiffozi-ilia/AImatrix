@@ -1,20 +1,26 @@
+from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
+from utils.data_loader import build_df_from_api
 import xml.etree.ElementTree as ET
-import pandas as pd
 import io
 
-# Примерный DataFrame, заменяется на build_df_from_api() в реальной версии
-df = pd.DataFrame([
-    {"id": "a.a.01", "title": "Главная", "body": "Описание", "parent_id": "", "level": "1"},
-    {"id": "a.a.01.01", "title": "Дочерняя", "body": "Описание 2", "parent_id": "a.a.01", "level": "2"},
-])
+router = APIRouter()
 
-# Создание элементов карты
-def build_mm_structure(df):
-    nodes = {row["id"]: ET.Element("node", {
-        "TEXT": row["title"],
-        "ID": row["id"],
-        "level": row["level"]
-    }) for _, row in df.iterrows()}
+@router.get("/mm")
+def export_mm():
+    df = build_df_from_api()
+    df = df.sort_values(by="id")
+
+    # Создание элементов карты MindMap (.mm)
+    nodes = {
+        row["id"]: ET.Element("node", {
+            "TEXT": row["title"],
+            "ID": row["id"],
+            "note": row["body"],
+            "LABEL": f"{row['id']}|{row.get('level','')}|{row.get('parent_id','')}|{row.get('parent_name','')}|{row.get('child_id','')}"
+        })
+        for _, row in df.iterrows()
+    }
 
     root_node = None
     for _, row in df.iterrows():
@@ -29,12 +35,12 @@ def build_mm_structure(df):
     map_elem = ET.Element("map", version="1.0.1")
     if root_node is not None:
         map_elem.append(root_node)
-    return ET.ElementTree(map_elem)
 
-tree = build_mm_structure(df)
+    tree = ET.ElementTree(map_elem)
+    output = io.BytesIO()
+    tree.write(output, encoding="utf-8", xml_declaration=True)
+    output.seek(0)
 
-# Сериализация для проверки
-buf = io.BytesIO()
-tree.write(buf, encoding="utf-8", xml_declaration=True)
-buf.seek(0)
-buf.getvalue().decode("utf-8")[:1000]
+    return StreamingResponse(output, media_type="application/xml", headers={
+        "Content-Disposition": "attachment; filename=matrix.mm"
+    })
