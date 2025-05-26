@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routes import json_export, md_full, md_clean, zip_export, csv_export, excel_export, opml_export, mm_export
+from routes import json_export, md_full, md_clean, zip_export, csv_export, excel_export, opml_export, mm_export, xmind_export
 
 app = FastAPI()
 
@@ -11,3 +11,4 @@ app.include_router(csv_export.router)
 app.include_router(excel_export.router)
 app.include_router(opml_export.router)
 app.include_router(mm_export.router)
+app.include_router(xmind_export.router)
