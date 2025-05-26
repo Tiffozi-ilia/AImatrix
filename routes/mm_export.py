@@ -1,8 +1,8 @@
+import pandas as pd
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from utils.data_loader import build_df_from_api
 import xml.etree.ElementTree as ET
-import pandas as pd
 import io
 
 router = APIRouter()
@@ -23,30 +23,39 @@ def export_mm():
         cid = row["id"]
         children_map.setdefault(pid, []).append(cid)
 
-    # Построение узла
+    # Построение узла с richcontent note и LABEL
     def build_node(node_id):
         row = node_data_map[node_id]
         node_elem = ET.Element("node", {
             "TEXT": str(row.get("title", "")),
             "ID": str(row["id"]),
-            "note": str(row.get("body", "")),
             "LABEL": f"{row['id']}|{row.get('level','')}|{row.get('parent_id','')}|{row.get('parent_name','')}|{row.get('child_id','')}"
         })
+
+        # Корректное добавление заметки (note)
+        if row.get("body", "").strip():
+            rc = ET.SubElement(node_elem, "richcontent", TYPE="NOTE")
+            html = ET.SubElement(rc, "html")
+            body = ET.SubElement(html, "body")
+            body.text = str(row["body"])
+
         for child_id in sorted(children_map.get(node_id, [])):
             node_elem.append(build_node(child_id))
+
         return node_elem
 
-    # Явное создание корня и прикрепление потомков
+    # Формирование карты
     map_elem = ET.Element("map", version="1.0.1")
     root_node = ET.SubElement(map_elem, "node", {
         "TEXT": title_map.get("+", "УБАиТ"),
         "ID": "+",
         "LABEL": "+|0|||"
     })
-    for top_id in sorted(children_map.get("+", [])):
-        root_node.append(build_node(top_id))
 
-    # Сборка
+    if "+" in children_map:
+        for top_id in sorted(children_map["+"]):
+            root_node.append(build_node(top_id))
+
     tree = ET.ElementTree(map_elem)
     output = io.BytesIO()
     tree.write(output, encoding="utf-8", xml_declaration=True)
