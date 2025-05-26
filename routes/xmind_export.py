@@ -8,7 +8,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from utils.data_loader import build_df_from_api
 
-xmind_export = APIRouter()
+router = APIRouter()
 
 def generate_id():
     return str(uuid.uuid4())
