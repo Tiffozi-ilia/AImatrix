@@ -10,51 +10,44 @@ router = APIRouter()
 @router.get("/mm")
 def export_mm():
     df = build_df_from_api()
-    df["id"] = df["id"].astype(str).str.strip()
-    df["parent_id"] = df["parent_id"].astype(str).str.strip()
+    df = df.sort_values(by="id")
 
-    # Словари
-    title_map = {row["id"]: row["title"] for _, row in df.iterrows()}
-    node_data_map = {row["id"]: row for _, row in df.iterrows()}
-    children_map = {}
+    # Гарантируем, что есть фиксированный корень "+"
+    if "+" not in df["id"].values:
+        df = pd.concat([
+            pd.DataFrame([{
+                "id": "+",
+                "title": "Корень",
+                "body": "",
+                "parent_id": "",
+                "level": "0",
+                "parent_name": "",
+                "child_id": ""
+            }]),
+            df
+        ], ignore_index=True)
 
-    for _, row in df.iterrows():
-        pid = row["parent_id"]
-        cid = row["id"]
-        children_map.setdefault(pid, []).append(cid)
-
-    # Построение узла с richcontent note и LABEL
-    def build_node(node_id):
-        row = node_data_map[node_id]
-        node_elem = ET.Element("node", {
-            "TEXT": str(row.get("title", "")),
-            "ID": str(row["id"]),
+    # Создание элементов карты MindMap (.mm)
+    nodes = {
+        row["id"]: ET.Element("node", {
+            "TEXT": row["title"],
+            "ID": row["id"],
+            "note": row["body"],
             "LABEL": f"{row['id']}|{row.get('level','')}|{row.get('parent_id','')}|{row.get('parent_name','')}|{row.get('child_id','')}"
         })
+        for _, row in df.iterrows()
+    }
 
-        # Корректное добавление заметки (note)
-        if row.get("body", "").strip():
-            rc = ET.SubElement(node_elem, "richcontent", TYPE="NOTE")
-            html = ET.SubElement(rc, "html")
-            body = ET.SubElement(html, "body")
-            body.text = str(row["body"])
+    for _, row in df.iterrows():
+        node = nodes[row["id"]]
+        parent_id = row["parent_id"]
+        if parent_id and parent_id in nodes:
+            nodes[parent_id].append(node)
 
-        for child_id in sorted(children_map.get(node_id, [])):
-            node_elem.append(build_node(child_id))
-
-        return node_elem
-
-    # Формирование карты
     map_elem = ET.Element("map", version="1.0.1")
-    root_node = ET.SubElement(map_elem, "node", {
-        "TEXT": title_map.get("+", "УБАиТ"),
-        "ID": "+",
-        "LABEL": "+|0|||"
-    })
-
-    if "+" in children_map:
-        for top_id in sorted(children_map["+"]):
-            root_node.append(build_node(top_id))
+    root_node = nodes.get("+")
+    if root_node is not None:
+        map_elem.append(root_node)
 
     tree = ET.ElementTree(map_elem)
     output = io.BytesIO()
