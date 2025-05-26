@@ -18,7 +18,7 @@ def create_node(row):
         "id": row["id"],
         "class": "topic",
         "title": row["title"],
-        "labels": [f"{row['id']}|{row.get('level', '')}|{row.get('parent_id', '')}|{row.get('parent_name', '')}|{row.get('child_id', '')}"]
+        "labels": [f"{row['id']}"]
     }
     if pd.notna(row.get("body")) and row["body"].strip():
         node["notes"] = {
