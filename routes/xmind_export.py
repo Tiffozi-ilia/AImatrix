@@ -18,6 +18,7 @@ def export_xmind():
     df = build_df_from_api()
     df = df.sort_values(by="id")
 
+    # Добавляем корень при необходимости
     if "+" not in df["id"].values:
         df = pd.concat([pd.DataFrame([{
             "id": "+",
@@ -31,6 +32,7 @@ def export_xmind():
 
     node_map = {}
 
+    # Создание всех узлов
     for _, row in df.iterrows():
         node_id = generate_id()
         node = {
@@ -39,18 +41,20 @@ def export_xmind():
             "structureClass": "org.xmind.ui.logic.right",
             "topics": [],
             "properties": {
-                "label": f"{row['id']}|{row.get('level','')}|{row.get('parent_id','')}|{row.get('parent_name','')}|{row.get('child_id','')}"
+                "label": f"{row['id']}|{row.get('level', '')}|{row.get('parent_id', '')}|{row.get('parent_name', '')}|{row.get('child_id', '')}"
             }
         }
         if row["body"]:
             node["notes"] = {"plain": row["body"]}
         node_map[row["id"]] = node
 
+    # Построение иерархии
     for _, row in df.iterrows():
         parent_id = row["parent_id"]
         if parent_id and parent_id in node_map:
             node_map[parent_id]["topics"].append(node_map[row["id"]])
 
+    # Корневой узел
     root_topic = node_map.get("+", {
         "id": generate_id(),
         "title": "Пусто",
@@ -58,13 +62,14 @@ def export_xmind():
         "topics": []
     })
 
-    # ОБЯЗАТЕЛЬНО: список и title
+    # content.json должен быть СПИСКОМ с обязательным title
     content = [{
         "id": generate_id(),
-        "title": "Almatrix",
+        "title": "Almatrix",  # важно!
         "rootTopic": root_topic
     }]
 
+    # metadata.json — для XMind
     timestamp = int(time.time() * 1000)
     metadata = {
         "creator": "Almatrix",
@@ -74,6 +79,7 @@ def export_xmind():
         "platform": "windows"
     }
 
+    # Сборка ZIP-файла
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("content.json", json.dumps(content, ensure_ascii=False, indent=2))
