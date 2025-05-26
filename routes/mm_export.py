@@ -1,44 +1,40 @@
-# Пересоздание маршрута /mm после сброса состояния
-from fastapi import APIRouter
-from fastapi.responses import StreamingResponse
-import pandas as pd
 import xml.etree.ElementTree as ET
+import pandas as pd
 import io
 
-router = APIRouter()
+# Примерный DataFrame, заменяется на build_df_from_api() в реальной версии
+df = pd.DataFrame([
+    {"id": "a.a.01", "title": "Главная", "body": "Описание", "parent_id": "", "level": "1"},
+    {"id": "a.a.01.01", "title": "Дочерняя", "body": "Описание 2", "parent_id": "a.a.01", "level": "2"},
+])
 
-def build_df_from_api():
-    # Мок-данные для демонстрации
-    return pd.DataFrame([
-        {"id": "a.a.01", "title": "Заголовок 1", "body": "Описание 1", "level": "2"},
-        {"id": "a.a.01.01", "title": "Заголовок 1.1", "body": "Описание 1.1", "level": "3"},
-    ])
+# Создание элементов карты
+def build_mm_structure(df):
+    nodes = {row["id"]: ET.Element("node", {
+        "TEXT": row["title"],
+        "ID": row["id"],
+        "level": row["level"]
+    }) for _, row in df.iterrows()}
 
-@router.get("/mm")
-def export_mm():
-    df = build_df_from_api()
-    df = df.sort_values(by="id")
-
-    root = ET.Element("map", version="1.0.1")
-
+    root_node = None
     for _, row in df.iterrows():
-        node = ET.SubElement(root, "node")
-        node.set("TEXT", row["title"])
+        node = nodes[row["id"]]
+        if row["parent_id"]:
+            parent = nodes.get(row["parent_id"])
+            if parent is not None:
+                parent.append(node)
+        else:
+            root_node = node
 
-        label_value = f"id: {row.get('id', '')} | level: {row.get('level', '')}"
-        node.set("LABEL", label_value)
+    map_elem = ET.Element("map", version="1.0.1")
+    if root_node is not None:
+        map_elem.append(root_node)
+    return ET.ElementTree(map_elem)
 
-        if row.get("body"):
-            richcontent = ET.SubElement(node, "richcontent", TYPE="NOTE")
-            html = ET.SubElement(richcontent, "html")
-            body = ET.SubElement(html, "body")
-            body.text = row["body"]
+tree = build_mm_structure(df)
 
-    tree = ET.ElementTree(root)
-    output = io.BytesIO()
-    tree.write(output, encoding="utf-8", xml_declaration=True)
-    output.seek(0)
-
-    return StreamingResponse(output, media_type="application/x-freemind", headers={
-        "Content-Disposition": "attachment; filename=matrix.mm"
-    })
+# Сериализация для проверки
+buf = io.BytesIO()
+tree.write(buf, encoding="utf-8", xml_declaration=True)
+buf.seek(0)
+buf.getvalue().decode("utf-8")[:1000]
