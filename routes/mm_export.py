@@ -10,32 +10,43 @@ router = APIRouter()
 @router.get("/mm")
 def export_mm():
     df = build_df_from_api()
-    df = df.sort_values(by="id")
+    df["id"] = df["id"].astype(str).str.strip()
+    df["parent_id"] = df["parent_id"].astype(str).str.strip()
 
-    # Создание элементов карты MindMap (.mm)
-    nodes = {}
+    # Словари
+    title_map = {row["id"]: row["title"] for _, row in df.iterrows()}
+    node_data_map = {row["id"]: row for _, row in df.iterrows()}
+    children_map = {}
+
     for _, row in df.iterrows():
-        node = ET.Element("node", {
-            "TEXT": str(row["title"]),
+        pid = row["parent_id"]
+        cid = row["id"]
+        children_map.setdefault(pid, []).append(cid)
+
+    # Построение узла
+    def build_node(node_id):
+        row = node_data_map[node_id]
+        node_elem = ET.Element("node", {
+            "TEXT": str(row.get("title", "")),
             "ID": str(row["id"]),
             "note": str(row.get("body", "")),
-            "LABEL": f"{row.get('id','')}|{row.get('level','')}|{row.get('parent_id','')}|{row.get('parent_name','')}|{row.get('child_id','')}"
+            "LABEL": f"{row['id']}|{row.get('level','')}|{row.get('parent_id','')}|{row.get('parent_name','')}|{row.get('child_id','')}"
         })
-        nodes[row["id"]] = node
+        for child_id in sorted(children_map.get(node_id, [])):
+            node_elem.append(build_node(child_id))
+        return node_elem
 
-    # Построение иерархии
-    for _, row in df.iterrows():
-        node = nodes[row["id"]]
-        parent_id = row.get("parent_id")
-        if parent_id and parent_id in nodes:
-            nodes[parent_id].append(node)
-
-    # Корень — узел с id == "+"
-    root_node = nodes.get("+")
+    # Явное создание корня и прикрепление потомков
     map_elem = ET.Element("map", version="1.0.1")
-    if root_node is not None:
-        map_elem.append(root_node)
+    root_node = ET.SubElement(map_elem, "node", {
+        "TEXT": title_map.get("+", "УБАиТ"),
+        "ID": "+",
+        "LABEL": "+|0|||"
+    })
+    for top_id in sorted(children_map.get("+", [])):
+        root_node.append(build_node(top_id))
 
+    # Сборка
     tree = ET.ElementTree(map_elem)
     output = io.BytesIO()
     tree.write(output, encoding="utf-8", xml_declaration=True)
