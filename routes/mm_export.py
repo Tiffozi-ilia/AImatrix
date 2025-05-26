@@ -12,12 +12,12 @@ def export_mm():
     df = build_df_from_api()
     df = df.sort_values(by="id")
 
-    # Гарантируем, что есть фиксированный корень "+"
+    # Добавляем корень, если его нет
     if "+" not in df["id"].values:
         df = pd.concat([
             pd.DataFrame([{
                 "id": "+",
-                "title": "Корень",
+                "title": "УБАИТ",
                 "body": "",
                 "parent_id": "",
                 "level": "0",
@@ -27,23 +27,39 @@ def export_mm():
             df
         ], ignore_index=True)
 
-    # Создание элементов карты MindMap (.mm)
-    nodes = {
-        row["id"]: ET.Element("node", {
-            "TEXT": row["title"],
-            "ID": row["id"],
-            "note": row["body"],
-            "LABEL": f"{row['id']}|{row.get('level','')}|{row.get('parent_id','')}|{row.get('parent_name','')}|{row.get('child_id','')}"
-        })
-        for _, row in df.iterrows()
-    }
+    nodes = {}
 
+    for _, row in df.iterrows():
+        node = ET.Element("node", {
+            "TEXT": row["title"],
+            "ID": row["id"]
+        })
+
+        # Notes (body → richcontent)
+        if row["body"]:
+            rich = ET.SubElement(node, "richcontent", {"TYPE": "NOTE"})
+            html = ET.SubElement(rich, "html")
+            ET.SubElement(html, "head")
+            body_html = ET.SubElement(html, "body")
+            body_html.text = row["body"]
+
+        # Ярлык как атрибут → сохраняется в свойствах .xmind
+        label_value = f"{row['id']}|{row.get('level','')}|{row.get('parent_id','')}|{row.get('parent_name','')}|{row.get('child_id','')}"
+        ET.SubElement(node, "attribute", {
+            "NAME": "label",
+            "VALUE": label_value
+        })
+
+        nodes[row["id"]] = node
+
+    # Строим иерархию
     for _, row in df.iterrows():
         node = nodes[row["id"]]
         parent_id = row["parent_id"]
         if parent_id and parent_id in nodes:
             nodes[parent_id].append(node)
 
+    # Финальный XML
     map_elem = ET.Element("map", version="1.0.1")
     root_node = nodes.get("+")
     if root_node is not None:
