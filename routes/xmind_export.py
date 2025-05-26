@@ -18,59 +18,55 @@ def export_xmind():
     df = build_df_from_api()
     df = df.sort_values(by="id")
 
-    # Гарантируем наличие корня
     if "+" not in df["id"].values:
-        df = pd.concat([
-            pd.DataFrame([{
-                "id": "+",
-                "title": "Корень",
-                "body": "",
-                "parent_id": "",
-                "level": "0",
-                "parent_name": "",
-                "child_id": ""
-            }]),
-            df
-        ], ignore_index=True)
+        df = pd.concat([pd.DataFrame([{
+            "id": "+",
+            "title": "Корень",
+            "body": "",
+            "parent_id": "",
+            "level": "0",
+            "parent_name": "",
+            "child_id": ""
+        }]), df], ignore_index=True)
 
     node_map = {}
 
+    # Шаг 1 — создаём заготовки всех узлов
     for _, row in df.iterrows():
         node_id = generate_id()
         node = {
             "id": node_id,
             "title": row["title"],
             "structureClass": "org.xmind.ui.logic.right",
-            "children": {"attached": []},
+            "topics": [],
             "properties": {
                 "label": f"{row['id']}|{row.get('level','')}|{row.get('parent_id','')}|{row.get('parent_name','')}|{row.get('child_id','')}"
             }
         }
         if row["body"]:
             node["notes"] = {"plain": row["body"]}
+
         node_map[row["id"]] = node
 
-    # Построение дерева
+    # Шаг 2 — выстраиваем иерархию
     for _, row in df.iterrows():
         parent_id = row["parent_id"]
         if parent_id and parent_id in node_map:
-            node_map[parent_id]["children"]["attached"].append(node_map[row["id"]])
+            node_map[parent_id]["topics"].append(node_map[row["id"]])
 
-    # root
+    # Корневой узел
     root_topic = node_map.get("+", {
         "id": generate_id(),
         "title": "Пусто",
         "structureClass": "org.xmind.ui.logic.right",
-        "children": {}
+        "topics": []
     })
 
-    # content.json
     content = {
         "rootTopic": root_topic,
         "id": generate_id()
     }
 
-    # metadata.json
     timestamp = int(time.time() * 1000)
     metadata = {
         "creator": "Almatrix",
@@ -80,13 +76,12 @@ def export_xmind():
         "platform": "windows"
     }
 
-    # Сборка .xmind ZIP
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("content.json", json.dumps(content, ensure_ascii=False, indent=2))
         zf.writestr("metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2))
-    buffer.seek(0)
 
+    buffer.seek(0)
     return StreamingResponse(
         buffer,
         media_type="application/vnd.xmind.workbook",
