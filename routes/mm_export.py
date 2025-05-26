@@ -11,6 +11,21 @@ def export_mm():
     df = build_df_from_api()
     df = df.sort_values(by="id")
 
+    # Гарантируем, что есть фиксированный корень "+"
+    if "+" not in df["id"].values:
+        df = pd.concat([
+            pd.DataFrame([{
+                "id": "+",
+                "title": "Корень",
+                "body": "",
+                "parent_id": "",
+                "level": "0",
+                "parent_name": "",
+                "child_id": ""
+            }]),
+            df
+        ], ignore_index=True)
+
     # Создание элементов карты MindMap (.mm)
     nodes = {
         row["id"]: ET.Element("node", {
@@ -22,17 +37,14 @@ def export_mm():
         for _, row in df.iterrows()
     }
 
-    root_node = None
     for _, row in df.iterrows():
         node = nodes[row["id"]]
-        if row["parent_id"]:
-            parent = nodes.get(row["parent_id"])
-            if parent is not None:
-                parent.append(node)
-        else:
-            root_node = node
+        parent_id = row["parent_id"]
+        if parent_id and parent_id in nodes:
+            nodes[parent_id].append(node)
 
     map_elem = ET.Element("map", version="1.0.1")
+    root_node = nodes.get("+")
     if root_node is not None:
         map_elem.append(root_node)
 
