@@ -12,40 +12,42 @@ def export_mm():
     df = build_df_from_api()
     df = df.sort_values(by="id")
 
-    # Гарантируем, что есть фиксированный корень "+"
-    if "+" not in df["id"].values:
-        df = pd.concat([
-            pd.DataFrame([{
-                "id": "+",
-                "title": "Корень",
-                "body": "",
-                "parent_id": "",
-                "level": "0",
-                "parent_name": "",
-                "child_id": ""
-            }]),
-            df
-        ], ignore_index=True)
+    # Добавим корень вручную
+    root_dict = {
+        "id": "+",
+        "title": "Matrix Root",
+        "body": "",
+        "level": "0",
+        "parent_id": "",
+        "parent_name": "",
+        "child_id": ""
+    }
+    df.loc[-1] = root_dict  # временная вставка
+    df.index = df.index + 1
+    df = df.sort_index()
 
-    # Создание элементов карты MindMap (.mm)
-    nodes = {
-        row["id"]: ET.Element("node", {
+    # Построение узлов
+    nodes = {}
+    for _, row in df.iterrows():
+        node = ET.Element("node", {
             "TEXT": row["title"],
             "ID": row["id"],
-            "note": row["body"],
-            "LABEL": f"{row['id']}|{row.get('level','')}|{row.get('parent_id','')}|{row.get('parent_name','')}|{row.get('child_id','')}"
+            "level": str(row["level"])
         })
-        for _, row in df.iterrows()
-    }
+        note = ET.SubElement(node, "richcontent", {"TYPE": "NOTE"})
+        note.text = row["body"]
+        nodes[row["id"]] = node
 
+    root_node = None
     for _, row in df.iterrows():
-        node = nodes[row["id"]]
+        current_id = row["id"]
         parent_id = row["parent_id"]
-        if parent_id and parent_id in nodes:
-            nodes[parent_id].append(node)
+        if current_id == "+":
+            root_node = nodes[current_id]
+        elif parent_id in nodes:
+            nodes[parent_id].append(nodes[current_id])
 
     map_elem = ET.Element("map", version="1.0.1")
-    root_node = nodes.get("+")
     if root_node is not None:
         map_elem.append(root_node)
 
@@ -54,6 +56,6 @@ def export_mm():
     tree.write(output, encoding="utf-8", xml_declaration=True)
     output.seek(0)
 
-    return StreamingResponse(output, media_type="application/xml", headers={
+    return StreamingResponse(output, media_type="text/xml", headers={
         "Content-Disposition": "attachment; filename=matrix.mm"
     })
