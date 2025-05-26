@@ -31,7 +31,7 @@ def export_xmind():
 
     node_map = {}
 
-    # Шаг 1 — создаём заготовки всех узлов
+    # Шаг 1 — создаём узлы
     for _, row in df.iterrows():
         node_id = generate_id()
         node = {
@@ -40,12 +40,11 @@ def export_xmind():
             "structureClass": "org.xmind.ui.logic.right",
             "topics": [],
             "properties": {
-                "label": f"{row['id']}|{row.get('level','')}|{row.get('parent_id','')}|{row.get('parent_name','')}|{row.get('child_id','')}"
+                "label": f"{row['id']}|{row.get('level', '')}|{row.get('parent_id', '')}|{row.get('parent_name', '')}|{row.get('child_id', '')}"
             }
         }
         if row["body"]:
             node["notes"] = {"plain": row["body"]}
-
         node_map[row["id"]] = node
 
     # Шаг 2 — выстраиваем иерархию
@@ -54,7 +53,6 @@ def export_xmind():
         if parent_id and parent_id in node_map:
             node_map[parent_id]["topics"].append(node_map[row["id"]])
 
-    # Корневой узел
     root_topic = node_map.get("+", {
         "id": generate_id(),
         "title": "Пусто",
@@ -62,10 +60,11 @@ def export_xmind():
         "topics": []
     })
 
-    content = {
-        "rootTopic": root_topic,
-        "id": generate_id()
-    }
+    # ❗ content.json должен быть списком
+    content = [{
+        "id": generate_id(),
+        "rootTopic": root_topic
+    }]
 
     timestamp = int(time.time() * 1000)
     metadata = {
