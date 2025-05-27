@@ -15,6 +15,9 @@ async def xmind_diff(file: UploadFile):
 
     # Разворачиваем xmind в список
     flat_xmind = flatten_xmind_nodes(content_json)
+    new_nodes = [n for n in flat_xmind if n.get("generated") and n["id"] not in pyrus_ids]
+    return {"content": format_as_markdown(new_nodes)}
+
 
     # Получаем и парсим данные из Pyrus
     raw_data = get_data()
