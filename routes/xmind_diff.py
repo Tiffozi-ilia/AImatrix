@@ -18,10 +18,19 @@ async def xmind_diff(file: UploadFile):
 
     # Получаем и парсим данные из Pyrus
     raw_data = get_data()
-    if isinstance(raw_data, str):
-        raw_data = json.loads(raw_data)
 
-    pyrus_ids = {item["id"] for item in raw_data}
+    if isinstance(raw_data, str):
+        try:
+            raw_data = json.loads(raw_data)
+        except json.JSONDecodeError:
+            # Если пришла строка с несколькими json-объектами построчно
+            raw_data = [json.loads(line) for line in raw_data.splitlines() if line.strip()]
+
+    if not isinstance(raw_data, list):
+        raise ValueError("Pyrus data is not a list")
+
+    # Собираем ID
+    pyrus_ids = {item["id"] for item in raw_data if isinstance(item, dict) and "id" in item}
 
     # Вычисляем только новые
     new_nodes = find_new_nodes(flat_xmind, pyrus_ids)
