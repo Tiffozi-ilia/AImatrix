@@ -6,7 +6,6 @@ def flatten_xmind_nodes(data):
         title = node.get("title", "")
         body = node.get("notes", {}).get("plain", {}).get("content", "")
 
-        # Генерируем id, если не задан
         if not node_id:
             node_id = f"{parent_id}.{index:02d}" if parent_id else f"{index:02d}"
 
@@ -18,13 +17,11 @@ def flatten_xmind_nodes(data):
             "body": body.strip()
         }]
 
-        # Обходим дочерние элементы с их порядковым индексом
         for i, child in enumerate(node.get("children", {}).get("attached", []), 1):
             flat.extend(walk(child, node_id, level + 1, i))
 
         return flat
 
-    # Берём только те корневые узлы, у которых есть дочерние элементы
     top_nodes = [item for item in data if item.get("children", {}).get("attached")]
 
     all_nodes = []
