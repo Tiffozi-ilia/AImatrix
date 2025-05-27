@@ -8,12 +8,19 @@ def flatten_xmind_nodes(data):
 
         is_generated = False
         if not node_id:
-            # Если последний компонент parent_id содержит буквы — используем буквенный суффикс
-            last = parent_id.split(".")[-1] if parent_id else ""
-            if any(c.isalpha() for c in last):
-                suffix = chr(ord("a") + (index - 1))  # 1 → 'a', 2 → 'b', ...
+            suffix = None
+            parts = parent_id.split(".") if parent_id else []
+
+            if parts and all(p.isalpha() for p in parts):
+                # Если весь parent_id состоит из букв: начинаем с 'a', 'b', ...
+                suffix = chr(ord("a") + (index - 1))
+            elif parts and parts[-1].isalpha():
+                # Если последний компонент — буква, продолжаем от неё
+                prev = parts[-1]
+                suffix = chr(ord(prev) + index)
             else:
-                suffix = f"{index:02d}"               # 1 → '01', 2 → '02', ...
+                # Иначе обычный цифровой
+                suffix = f"{index:02d}"
 
             node_id = f"{parent_id}.{suffix}" if parent_id else f"a.a.{suffix}"
             is_generated = True
