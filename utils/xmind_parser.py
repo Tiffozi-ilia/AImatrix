@@ -22,8 +22,8 @@ def flatten_xmind_nodes(data):
             for sibling in siblings:
                 s_label = sibling.get("labels", [])
                 s_id = s_label[0].strip() if s_label and s_label[0].strip() else None
-                if s_id and s_id.startswith(parent_id):
-                    tail = s_id[len(parent_id) + 1:]
+                if s_id and s_id.startswith(parent_id + "."):
+                    tail = s_id.split(".")[-1]
                     existing_suffixes.add(tail)
 
             last_component = parent_id.split(".")[-1] if parent_id else ""
