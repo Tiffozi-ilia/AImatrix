@@ -1,3 +1,11 @@
+from fastapi import APIRouter, UploadFile
+from utils.xmind_parser import flatten_xmind_nodes
+from utils.diff_engine import format_as_markdown
+from utils.data_loader import get_data
+import zipfile, io, json
+
+router = APIRouter()
+
 @router.post("/xmind-diff")
 async def xmind_diff(file: UploadFile):
     # Читаем .xmind файл как zip
@@ -32,7 +40,7 @@ async def xmind_diff(file: UploadFile):
         if isinstance(item, dict) and "id" in item
     }
 
-    # Оставляем только сгенерированные и реально новые
+    # Фильтруем только новые и сгенерированные
     new_nodes = [
         n for n in flat_xmind
         if n.get("generated") and n["id"] not in pyrus_ids
