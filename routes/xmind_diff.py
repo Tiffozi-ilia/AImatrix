@@ -8,12 +8,23 @@ router = APIRouter()
 
 @router.post("/xmind-diff")
 async def xmind_diff(file: UploadFile):
+    # Читаем .xmind файл как zip
     content = await file.read()
     with zipfile.ZipFile(io.BytesIO(content)) as z:
         content_json = json.loads(z.read("content.json"))
 
+    # Разворачиваем xmind в список
     flat_xmind = flatten_xmind_nodes(content_json)
-    pyrus_ids = {item["id"] for item in get_data()}
 
+    # Получаем и парсим данные из Pyrus
+    raw_data = get_data()
+    if isinstance(raw_data, str):
+        raw_data = json.loads(raw_data)
+
+    pyrus_ids = {item["id"] for item in raw_data}
+
+    # Вычисляем только новые
     new_nodes = find_new_nodes(flat_xmind, pyrus_ids)
+
+    # Отдаём markdown
     return {"content": format_as_markdown(new_nodes)}
