@@ -1,23 +1,24 @@
 def flatten_xmind_nodes(data):
     def walk(node, parent_id="", level=1):
-        label = node.get("labels", [""])[0]
+        node_id = node.get("labels", [""])[0] or node.get("id")  # правильный ID
+        title = node.get("title", "")
         body = node.get("notes", {}).get("plain", {}).get("content", "")
-        node_id = label or node.get("id")
 
-        result = [{
+        flat = [{
             "id": node_id,
             "parent_id": parent_id,
             "level": level,
-            "title": node.get("title", ""),
+            "title": title,
             "body": body.strip()
         }]
 
         for child in node.get("children", {}).get("attached", []):
-            result.extend(walk(child, node_id, level + 1))
+            flat.extend(walk(child, node_id, level + 1))
 
-        return result
+        return flat
 
-    results = []
+    # ⚠️ data — это список корневых узлов, обрабатываем всех
+    all_nodes = []
     for root in data:
-        results.extend(walk(root))
-    return results
+        all_nodes.extend(walk(root))
+    return all_nodes
