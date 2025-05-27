@@ -26,9 +26,12 @@ async def xmind_diff(file: UploadFile):
             # Если пришла строка с несколькими json-объектами построчно
             raw_data = [json.loads(line) for line in raw_data.splitlines() if line.strip()]
 
-    # Если вложено как {"data": [...]}
-    if isinstance(raw_data, dict) and "data" in raw_data:
-        raw_data = raw_data["data"]
+    # Если пришёл dict — ищем в нём список
+    if isinstance(raw_data, dict):
+        for value in raw_data.values():
+            if isinstance(value, list):
+                raw_data = value
+                break
 
     if not isinstance(raw_data, list):
         raise ValueError(f"Pyrus data is not a list: got {type(raw_data)} instead")
