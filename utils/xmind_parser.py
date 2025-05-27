@@ -1,6 +1,5 @@
 def flatten_xmind_nodes(data):
     def int_to_alpha(n):
-        """Преобразует индекс в буквенный суффикс: 1 → a, 2 → b, ..., 27 → aa и т.д."""
         result = ""
         while n > 0:
             n -= 1
@@ -51,7 +50,7 @@ def flatten_xmind_nodes(data):
 
         children = node.get("children", {}).get("attached", [])
         for child in children:
-            child["siblings"] = children  # пробрасываем братьев для анализа ID
+            child["siblings"] = children
         for child in children:
             flat.extend(walk(child, parent_id=node_id, level=level + 1))
 
@@ -60,9 +59,10 @@ def flatten_xmind_nodes(data):
     root_topic = data[0].get("rootTopic", {})
     attached = root_topic.get("children", {}).get("attached", [])
 
-    all_nodes = []
     for child in attached:
         child["siblings"] = attached
+
+    all_nodes = []
     for child in attached:
         all_nodes.extend(walk(child, parent_id="a.a", level=3))
 
