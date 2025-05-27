@@ -1,11 +1,3 @@
-from fastapi import APIRouter, UploadFile
-from utils.xmind_parser import flatten_xmind_nodes
-from utils.diff_engine import find_new_nodes, format_as_markdown
-from utils.data_loader import get_data
-import zipfile, io, json
-
-router = APIRouter()
-
 @router.post("/xmind-diff")
 async def xmind_diff(file: UploadFile):
     # Читаем .xmind файл как zip
@@ -15,9 +7,6 @@ async def xmind_diff(file: UploadFile):
 
     # Разворачиваем xmind в список
     flat_xmind = flatten_xmind_nodes(content_json)
-    new_nodes = [n for n in flat_xmind if n.get("generated") and n["id"] not in pyrus_ids]
-    return {"content": format_as_markdown(new_nodes)}
-
 
     # Получаем и парсим данные из Pyrus
     raw_data = get_data()
@@ -26,10 +15,8 @@ async def xmind_diff(file: UploadFile):
         try:
             raw_data = json.loads(raw_data)
         except json.JSONDecodeError:
-            # Если пришла строка с несколькими json-объектами построчно
             raw_data = [json.loads(line) for line in raw_data.splitlines() if line.strip()]
 
-    # Если пришёл dict — ищем в нём список
     if isinstance(raw_data, dict):
         for value in raw_data.values():
             if isinstance(value, list):
@@ -39,11 +26,16 @@ async def xmind_diff(file: UploadFile):
     if not isinstance(raw_data, list):
         raise ValueError(f"Pyrus data is not a list: got {type(raw_data)} instead")
 
-    # Собираем ID
-    pyrus_ids = {item["id"] for item in raw_data if isinstance(item, dict) and "id" in item}
+    # Собираем ID из Pyrus
+    pyrus_ids = {
+        item["id"] for item in raw_data
+        if isinstance(item, dict) and "id" in item
+    }
 
-    # Вычисляем только новые
-    new_nodes = find_new_nodes(flat_xmind, pyrus_ids)
+    # Оставляем только сгенерированные и реально новые
+    new_nodes = [
+        n for n in flat_xmind
+        if n.get("generated") and n["id"] not in pyrus_ids
+    ]
 
-    # Отдаём markdown
     return {"content": format_as_markdown(new_nodes)}
