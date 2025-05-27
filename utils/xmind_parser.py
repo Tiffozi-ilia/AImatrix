@@ -17,7 +17,7 @@ def flatten_xmind_nodes(data):
             elif parts and parts[-1].isalpha():
                 # Если последний компонент — буква, продолжаем от неё
                 prev = parts[-1]
-                suffix = chr(ord(prev) + index)
+                suffix = chr(ord(prev) + 1)
             else:
                 # Иначе обычный цифровой
                 suffix = f"{index:02d}"
