@@ -1,6 +1,8 @@
 from fastapi import APIRouter, UploadFile, File
 import zipfile, io, json
 import pandas as pd
+from utils.data_loader import get_data
+from utils.diff_engine import format_as_markdown
 
 router = APIRouter()
 
@@ -30,30 +32,21 @@ def extract_xmind_nodes(xmind_file: UploadFile):
     root_topic = content_json[0].get("rootTopic", {})
     return pd.DataFrame(walk(root_topic))
 
-def get_pyrus_mock_data():
-    return [
-        {
-            "fields": [
-                {"name": "matrix_id", "value": "a.a"},
-                {"name": "title", "value": "Заголовок A"},
-                {"name": "body", "value": "Описание A"},
-                {"name": "level", "value": "1"},
-                {"name": "parent_id", "value": "+"},
-            ]
-        },
-        {
-            "fields": [
-                {"name": "matrix_id", "value": "a.b"},
-                {"name": "title", "value": "Заголовок B"},
-                {"name": "body", "value": "Описание B"},
-                {"name": "level", "value": "1"},
-                {"name": "parent_id", "value": "+"},
-            ]
-        },
-    ]
-
 def extract_pyrus_data():
-    raw = get_pyrus_mock_data()
+    raw = get_data()
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = [json.loads(line) for line in raw.splitlines() if line.strip()]
+    if isinstance(raw, dict):
+        for value in raw.values():
+            if isinstance(value, list):
+                raw = value
+                break
+    if not isinstance(raw, list):
+        raise ValueError("Pyrus data is not a list")
+
     rows = []
     for task in raw:
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
@@ -62,7 +55,8 @@ def extract_pyrus_data():
             "title": fields.get("title", "").strip(),
             "body": fields.get("body", "").strip(),
             "level": str(fields.get("level", "")).strip(),
-            "parent_id": fields.get("parent_id", "").strip()
+            "parent_id": fields.get("parent_id", "").strip(),
+            "pyrus_id": task.get("id")  # ← добавляем task_id
         })
     return pd.DataFrame(rows)
 
@@ -72,6 +66,7 @@ async def detect_deleted_items(xmind: UploadFile = File(...)):
     pyrus_df = extract_pyrus_data()
 
     deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])]
-    return {
-        "deleted": deleted[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
-    }
+
+    records = deleted[["id", "parent_id", "level", "title", "body", "pyrus_id"]].to_dict(orient="records")
+
+    return {"content": format_as_markdown(records)}
