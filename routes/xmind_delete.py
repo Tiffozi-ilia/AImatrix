@@ -2,7 +2,7 @@ from fastapi import APIRouter, UploadFile, File
 import zipfile, io, json
 import pandas as pd
 from utils.data_loader import get_data
-from utils.diff_engine import format_as_markdown
+from tabulate import tabulate
 
 router = APIRouter()
 
@@ -32,6 +32,7 @@ def extract_xmind_nodes(xmind_file: UploadFile):
     root_topic = content_json[0].get("rootTopic", {})
     return pd.DataFrame(walk(root_topic))
 
+
 def extract_pyrus_data():
     raw = get_data()
     if isinstance(raw, str):
@@ -48,7 +49,8 @@ def extract_pyrus_data():
         raise ValueError("Pyrus data is not a list")
 
     rows = []
-    task_id = task.get("id", "")  # <-- task_id на верхнем уровне
+    for task in raw:
+        task_id = task.get("id", "")
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
         rows.append({
             "id": fields.get("matrix_id", "").strip(),
@@ -58,15 +60,26 @@ def extract_pyrus_data():
             "parent_id": fields.get("parent_id", "").strip(),
             "pyrus_id": task_id
         })
+
     return pd.DataFrame(rows)
+
 
 @router.post("/xmind-delete")
 async def detect_deleted_items(xmind: UploadFile = File(...)):
     xmind_df = extract_xmind_nodes(xmind)
     pyrus_df = extract_pyrus_data()
 
-    deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])]
+    deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])][
+        ["id", "parent_id", "level", "title", "body", "pyrus_id"]
+    ]
 
-    records = deleted[["id", "parent_id", "level", "title", "body", "pyrus_id"]].to_dict(orient="records")
+    table = tabulate(
+        deleted.values.tolist(),
+        headers=deleted.columns.tolist(),
+        tablefmt="github"
+    )
 
-    return {"content": format_as_markdown(records)}
+    return {
+        "deleted": deleted.to_dict(orient="records"),
+        "table": table
+    }
