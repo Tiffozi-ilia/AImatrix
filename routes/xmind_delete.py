@@ -1,9 +1,8 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import APIRouter, UploadFile, File
 import zipfile, io, json
 import pandas as pd
 
-app = FastAPI()
-
+router = APIRouter()
 
 def extract_xmind_nodes(xmind_file: UploadFile):
     content = xmind_file.file.read()
@@ -31,9 +30,7 @@ def extract_xmind_nodes(xmind_file: UploadFile):
     root_topic = content_json[0].get("rootTopic", {})
     return pd.DataFrame(walk(root_topic))
 
-
 def get_pyrus_mock_data():
-    # Пример имитации Pyrus JSON
     return [
         {
             "fields": [
@@ -41,7 +38,7 @@ def get_pyrus_mock_data():
                 {"name": "title", "value": "Заголовок A"},
                 {"name": "body", "value": "Описание A"},
                 {"name": "level", "value": "1"},
-                {"name": "parent_id", "value": "+"}
+                {"name": "parent_id", "value": "+"},
             ]
         },
         {
@@ -50,11 +47,10 @@ def get_pyrus_mock_data():
                 {"name": "title", "value": "Заголовок B"},
                 {"name": "body", "value": "Описание B"},
                 {"name": "level", "value": "1"},
-                {"name": "parent_id", "value": "+"}
+                {"name": "parent_id", "value": "+"},
             ]
-        }
+        },
     ]
-
 
 def extract_pyrus_data():
     raw = get_pyrus_mock_data()
@@ -70,11 +66,11 @@ def extract_pyrus_data():
         })
     return pd.DataFrame(rows)
 
-
-@app.post("/xmind-delete")
+@router.post("/xmind-delete")
 async def detect_deleted_items(xmind: UploadFile = File(...)):
     xmind_df = extract_xmind_nodes(xmind)
     pyrus_df = extract_pyrus_data()
+
     deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])]
     return {
         "deleted": deleted[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
