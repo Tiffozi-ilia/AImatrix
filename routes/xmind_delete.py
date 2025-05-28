@@ -32,7 +32,6 @@ def extract_xmind_nodes(xmind_file: UploadFile):
     root_topic = content_json[0].get("rootTopic", {})
     return pd.DataFrame(walk(root_topic))
 
-
 def extract_pyrus_data():
     raw = get_data()
     if isinstance(raw, str):
@@ -58,27 +57,27 @@ def extract_pyrus_data():
             "body": str(fields.get("body", "")).strip(),
             "level": str(fields.get("level", "")).strip(),
             "parent_id": str(fields.get("parent_id", "")).strip(),
-            "pyrus_id": str(task_id).strip()
+            "pyrus_id": str(task_id)
         })
-    return pd.DataFrame(rows)
 
+    return pd.DataFrame(rows)
 
 @router.post("/xmind-delete")
 async def detect_deleted_items(xmind: UploadFile = File(...)):
     xmind_df = extract_xmind_nodes(xmind)
     pyrus_df = extract_pyrus_data()
 
-    # Очистка идентификаторов
+    # Очистка ID
     xmind_df["id"] = xmind_df["id"].astype(str).str.strip()
     pyrus_df["id"] = pyrus_df["id"].astype(str).str.strip()
 
     # Поиск удалённых
     deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])].copy()
 
-    # Отладка: вывод предупреждения, если нет pyrus_id
+    # Защита от потери pyrus_id
     if deleted["pyrus_id"].isnull().any():
         print("WARNING: Some pyrus_id values are missing!")
 
-    # Преобразование в markdown
     records = deleted[["id", "parent_id", "level", "title", "body", "pyrus_id"]].to_dict(orient="records")
+
     return {"content": format_as_markdown(records)}
