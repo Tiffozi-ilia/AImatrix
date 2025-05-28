@@ -55,8 +55,7 @@ def extract_pyrus_data():
             "title": fields.get("title", "").strip(),
             "body": fields.get("body", "").strip(),
             "level": str(fields.get("level", "")).strip(),
-            "parent_id": fields.get("parent_id", "").strip(),
-            "pyrus_id": task.get("id")  # ← добавляем task_id
+            "parent_id": fields.get("parent_id", "").strip(),            
         })
     return pd.DataFrame(rows)
 
@@ -67,6 +66,6 @@ async def detect_deleted_items(xmind: UploadFile = File(...)):
 
     deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])]
 
-    records = deleted[["id", "parent_id", "level", "title", "body", "pyrus_id"]].to_dict(orient="records")
+    records = deleted[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
 
     return {"content": format_as_markdown(records)}
