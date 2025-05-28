@@ -56,7 +56,7 @@ def extract_pyrus_data():
             "body": fields.get("body", "").strip(),
             "level": str(fields.get("level", "")).strip(),
             "parent_id": fields.get("parent_id", "").strip(),
-            "pyrus_id": task.get("id")  # ← добавляем task_id
+            "pyrus_id": str(task_id) # ← добавляем task_id
         })
     return pd.DataFrame(rows)
 
