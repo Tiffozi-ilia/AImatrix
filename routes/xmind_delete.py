@@ -2,35 +2,9 @@ from fastapi import APIRouter, UploadFile, File
 import zipfile, io, json
 import pandas as pd
 from utils.data_loader import get_data
+from utils.diff_engine import format_as_markdown
 
 router = APIRouter()
-
-def extract_xmind_nodes(xmind_file: UploadFile):
-    content = xmind_file.file.read()
-    with zipfile.ZipFile(io.BytesIO(content)) as z:
-        content_json = json.loads(z.read("content.json"))
-
-    def walk(node, parent_id="", level=0):
-        label = node.get("labels", [])
-        node_id = label[0] if label else None
-        title = node.get("title", "")
-        body = node.get("notes", {}).get("plain", {}).get("content", "")
-        rows = []
-        if node_id:
-            rows.append({
-                "id": node_id.strip(),
-                "title": title.strip(),
-                "body": body.strip(),
-                "level": str(level),
-                "parent_id": parent_id.strip()
-            })
-        for child in node.get("children", {}).get("attached", []):
-            rows.extend(walk(child, node_id, level + 1))
-        return rows
-
-    root_topic = content_json[0].get("rootTopic", {})
-    return pd.DataFrame(walk(root_topic))
-
 
 def extract_pyrus_data():
     raw = get_data()
@@ -59,16 +33,37 @@ def extract_pyrus_data():
             "parent_id": fields.get("parent_id", "").strip(),
             "pyrus_id": task_id
         })
-
     return pd.DataFrame(rows)
-
 
 @router.post("/xmind-delete")
 async def detect_deleted_items(xmind: UploadFile = File(...)):
-    xmind_df = extract_xmind_nodes(xmind)
-    pyrus_df = extract_pyrus_data()
+    content = await xmind.read()  # критически важно — иначе файл будет пустой
+    with zipfile.ZipFile(io.BytesIO(content)) as z:
+        content_json = json.loads(z.read("content.json"))
 
+    def walk(node, parent_id="", level=0):
+        label = node.get("labels", [])
+        node_id = label[0] if label else None
+        title = node.get("title", "")
+        body = node.get("notes", {}).get("plain", {}).get("content", "")
+        rows = []
+        if node_id:
+            rows.append({
+                "id": node_id.strip(),
+                "title": title.strip(),
+                "body": body.strip(),
+                "level": str(level),
+                "parent_id": parent_id.strip()
+            })
+        for child in node.get("children", {}).get("attached", []):
+            rows.extend(walk(child, node_id, level + 1))
+        return rows
+
+    root_topic = content_json[0].get("rootTopic", {})
+    xmind_df = pd.DataFrame(walk(root_topic))
+
+    pyrus_df = extract_pyrus_data()
     deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])]
-    return {
-        "deleted": deleted[["id", "parent_id", "level", "title", "body", "pyrus_id"]].to_dict(orient="records")
-    }
+    records = deleted[["id", "parent_id", "level", "title", "body", "pyrus_id"]].to_dict(orient="records")
+
+    return {"content": format_as_markdown(records)}
