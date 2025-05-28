@@ -48,7 +48,7 @@ def extract_pyrus_data():
         raise ValueError("Pyrus data is not a list")
 
     rows = []
-    for task in raw:
+    task_id = task.get("id", "")  # <-- task_id на верхнем уровне
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
         rows.append({
             "id": fields.get("matrix_id", "").strip(),
@@ -56,7 +56,7 @@ def extract_pyrus_data():
             "body": fields.get("body", "").strip(),
             "level": str(fields.get("level", "")).strip(),
             "parent_id": fields.get("parent_id", "").strip(),
-            "pyrus_id": str(task_id) # ← добавляем task_id
+            "pyrus_id": task_id
         })
     return pd.DataFrame(rows)
 
