@@ -6,8 +6,10 @@ from utils.diff_engine import format_as_markdown
 
 router = APIRouter()
 
-def extract_xmind_nodes(xmind_file: UploadFile):
-    content = xmind_file.file.read()
+@router.post("/xmind-delete")
+async def detect_deleted_items(xmind: UploadFile = File(...)):
+    # --- Извлечение узлов из XMind ---
+    content = await xmind.read()
     with zipfile.ZipFile(io.BytesIO(content)) as z:
         content_json = json.loads(z.read("content.json"))
 
@@ -30,9 +32,9 @@ def extract_xmind_nodes(xmind_file: UploadFile):
         return rows
 
     root_topic = content_json[0].get("rootTopic", {})
-    return pd.DataFrame(walk(root_topic))
+    xmind_df = pd.DataFrame(walk(root_topic))
 
-def extract_pyrus_data():
+    # --- Извлечение данных из Pyrus ---
     raw = get_data()
     if isinstance(raw, str):
         try:
@@ -57,16 +59,13 @@ def extract_pyrus_data():
             "level": str(fields.get("level", "")).strip(),
             "parent_id": fields.get("parent_id", "").strip()
         })
-    return pd.DataFrame(rows)
+    pyrus_df = pd.DataFrame(rows)
 
-@router.post("/xmind-delete")
-async def detect_deleted_items(xmind: UploadFile = File(...)):
-    xmind_df = extract_xmind_nodes(xmind)
-    pyrus_df = extract_pyrus_data()
-
+    # --- Поиск удалённых ---
     deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])]
     records = deleted[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
 
+    # --- Возврат markdown-таблицы ---
     return {
-        "content": format_as_markdown(records)  # ← строго markdown, ключ "content"
+        "content": format_as_markdown(records)
     }
