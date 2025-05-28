@@ -2,6 +2,7 @@ from fastapi import APIRouter, UploadFile, File
 import zipfile, io, json
 import pandas as pd
 from utils.data_loader import get_data
+from utils.diff_engine import format_as_markdown
 
 router = APIRouter()
 
@@ -54,7 +55,8 @@ def extract_pyrus_data():
             "title": fields.get("title", "").strip(),
             "body": fields.get("body", "").strip(),
             "level": str(fields.get("level", "")).strip(),
-            "parent_id": fields.get("parent_id", "").strip()
+            "parent_id": fields.get("parent_id", "").strip(),
+            "pyrus_id": task.get("id")  # ← добавляем task_id
         })
     return pd.DataFrame(rows)
 
@@ -65,6 +67,6 @@ async def detect_deleted_items(xmind: UploadFile = File(...)):
 
     deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])]
 
-    return {
-        "deleted": deleted[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
-    }
+    records = deleted[["id", "parent_id", "level", "title", "body", "pyrus_id"]].to_dict(orient="records")
+
+    return {"content": format_as_markdown(records)}
