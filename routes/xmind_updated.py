@@ -59,21 +59,14 @@ def extract_pyrus_data():
         })
     return pd.DataFrame(rows)
 
-@router.post("/xmind-updated")
-async def detect_updated_items(xmind: UploadFile = File(...)):
+@router.post("/xmind-delete")
+async def detect_deleted_items(xmind: UploadFile = File(...)):
     xmind_df = extract_xmind_nodes(xmind)
     pyrus_df = extract_pyrus_data()
 
-    merged = pd.merge(xmind_df, pyrus_df, on="id", suffixes=("_xmind", "_pyrus"))
-    diffs = merged[(merged["title_xmind"] != merged["title_pyrus"]) |
-                   (merged["body_xmind"] != merged["body_pyrus"])]
+    # Ищем записи из Pyrus, которых нет в XMind → значит они были удалены
+    deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])]
 
-    # Возвращаем итоговые актуальные значения из XMind в виде markdown-таблицы
-    records = diffs.rename(columns={
-        "title_xmind": "title",
-        "body_xmind": "body",
-        "parent_id_xmind": "parent_id",
-        "level_xmind": "level"
-    })[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
+    records = deleted[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
 
     return {"content": format_as_markdown(records)}
