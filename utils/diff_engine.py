@@ -18,9 +18,9 @@ def format_as_markdown(nodes):
     if not nodes:
         return "Новых элементов не найдено."
 
-    header = "| id | parent_id | level | title | body | pyrus_id |\n|---|---|---|---|---|"
+    header = "| id | parent_id | level | title | body |\n|---|---|---|---|---|"
     rows = [
-        f"| {n['id']} | {n['parent_id']} | {n['level']} | {n['title']} | {n['body']} | {n.get('pyrus_id', '')} |"
+        f"| {n['id']} | {n['parent_id']} | {n['level']} | {n['title']} | {n['body']} |"
         for n in nodes
     ]
     return "\n".join([header] + rows)
