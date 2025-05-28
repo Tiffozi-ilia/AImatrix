@@ -9,23 +9,26 @@ router = APIRouter()
 def extract_pyrus_data():
     raw = get_data()
 
+    # Строго парсим строку
     if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except json.JSONDecodeError:
-            raw = [json.loads(line) for line in raw.splitlines() if line.strip()]
+        raw = json.loads(raw)
 
-    # Фикс: извлекаем список задач из поля "tasks"
-    if isinstance(raw, dict) and "tasks" in raw:
-        raw = raw["tasks"]
+    # 💥 Радикально: проверяем, что внутри "tasks" и выдёргиваем их
+    if not isinstance(raw, dict) or "tasks" not in raw:
+        raise ValueError("Pyrus JSON должен содержать ключ 'tasks'")
 
-    if not isinstance(raw, list):
-        raise ValueError("Pyrus data is not a list")
+    raw_tasks = raw["tasks"]
+    if not isinstance(raw_tasks, list):
+        raise ValueError("'tasks' должен быть списком")
 
+    # Чёткий разбор задач
     rows = []
-    for task in raw:
-        task_id = task.get("id", "")
-        fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
+    for task in raw_tasks:
+        task_id = task.get("id")
+        if not task_id:
+            continue  # пропускаем мусор
+
+        fields = {f.get("name"): f.get("value") for f in task.get("fields", [])}
         rows.append({
             "id": str(fields.get("matrix_id", "")).strip(),
             "title": str(fields.get("title", "")).strip(),
@@ -34,6 +37,7 @@ def extract_pyrus_data():
             "parent_id": str(fields.get("parent_id", "")).strip(),
             "pyrus_id": str(task_id)
         })
+
     return pd.DataFrame(rows)
 
 @router.post("/xmind-delete")
@@ -63,15 +67,11 @@ async def detect_deleted_items(xmind: UploadFile = File(...)):
     root_topic = content_json[0].get("rootTopic", {})
     xmind_df = pd.DataFrame(walk(root_topic))
 
-    # Очистка ID
     xmind_df["id"] = xmind_df["id"].astype(str).str.strip()
-
     pyrus_df = extract_pyrus_data()
     pyrus_df["id"] = pyrus_df["id"].astype(str).str.strip()
 
-    # Фильтрация удалённых
     deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])].copy()
-
-    # Формирование результата
     records = deleted[["id", "parent_id", "level", "title", "body", "pyrus_id"]].to_dict(orient="records")
+
     return {"content": format_as_markdown(records)}
