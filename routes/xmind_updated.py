@@ -35,52 +35,43 @@ def extract_xmind_nodes(xmind_file: UploadFile):
 def extract_pyrus_data():
     raw = get_data()
     if isinstance(raw, str):
-        raw = json.loads(raw)
-    if isinstance(raw, dict) and "tasks" in raw:
-        raw = raw["tasks"]
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = [json.loads(line) for line in raw.splitlines() if line.strip()]
+    if isinstance(raw, dict):
+        for value in raw.values():
+            if isinstance(value, list):
+                raw = value
+                break
+    if not isinstance(raw, list):
+        raise ValueError("Pyrus data is not a list")
 
     rows = []
     for task in raw:
-        task_id = task.get("id", "")
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
         rows.append({
             "id": fields.get("matrix_id", "").strip(),
             "title": fields.get("title", "").strip(),
             "body": fields.get("body", "").strip(),
             "level": str(fields.get("level", "")).strip(),
-            "parent_id": fields.get("parent_id", "").strip(),
-            "pyrus_id": str(task_id)
+            "parent_id": fields.get("parent_id", "").strip()
         })
     return pd.DataFrame(rows)
 
 @router.post("/xmind-updated")
-async def xmind_updated(xmind: UploadFile = File(...)):
+async def detect_updated_items(xmind: UploadFile = File(...)):
     xmind_df = extract_xmind_nodes(xmind)
     pyrus_df = extract_pyrus_data()
 
     merged = pd.merge(xmind_df, pyrus_df, on="id", suffixes=("_xmind", "_pyrus"))
+    diffs = merged[(merged["title_xmind"] != merged["title_pyrus"]) |
+                   (merged["body_xmind"] != merged["body_pyrus"])]
 
-    # Сравниваем поля, которые могли измениться
-    changed = merged[
-        (merged["title_xmind"] != merged["title_pyrus"]) |
-        (merged["body_xmind"] != merged["body_pyrus"]) |
-        (merged["level_xmind"] != merged["level_pyrus"]) |
-        (merged["parent_id_xmind"] != merged["parent_id_pyrus"])
-    ]
-
-    records = changed[[
-        "id",
-        "parent_id_pyrus", "level_pyrus", "title_pyrus", "body_pyrus", "pyrus_id",  # старое
-        "parent_id_xmind", "level_xmind", "title_xmind", "body_xmind"               # новое
-    ]].rename(columns={
-        "parent_id_pyrus": "old_parent_id",
-        "level_pyrus": "old_level",
-        "title_pyrus": "old_title",
-        "body_pyrus": "old_body",
-        "parent_id_xmind": "new_parent_id",
-        "level_xmind": "new_level",
-        "title_xmind": "new_title",
-        "body_xmind": "new_body"
-    }).to_dict(orient="records")
-
-    return {"content": format_as_markdown(records)}
+    # Возвращаем итоговые актуальные значения из XMind в виде markdown-таблицы
+    records = diffs.rename(columns={
+        "title_xmind": "title",
+        "body_xmind": "body",
+        "parent_id_xmind": "parent_id",
+        "level_xmind": "level"
+    })[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
