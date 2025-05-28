@@ -32,7 +32,7 @@ def extract_xmind_nodes(xmind_file: UploadFile):
     root_topic = content_json[0].get("rootTopic", {})
     return pd.DataFrame(walk(root_topic))
 
-def extract_pyrus_data():
+def extract_pyrus_data_and_map():
     raw = get_data()
     if isinstance(raw, str):
         try:
@@ -48,36 +48,41 @@ def extract_pyrus_data():
         raise ValueError("Pyrus data is not a list")
 
     rows = []
+    id_to_task = {}
+
     for task in raw:
-        task_id = task.get("id", "")
+        task_id = str(task.get("id", "")).strip()
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
+        matrix_id = str(fields.get("matrix_id", "")).strip()
+
+        if matrix_id:
+            id_to_task[matrix_id] = task_id  # <- маппинг matrix_id → pyrus task_id
+
         rows.append({
-            "id": str(fields.get("matrix_id", "")).strip(),
+            "id": matrix_id,
             "title": str(fields.get("title", "")).strip(),
             "body": str(fields.get("body", "")).strip(),
             "level": str(fields.get("level", "")).strip(),
-            "parent_id": str(fields.get("parent_id", "")).strip(),
-            "pyrus_id": str(task_id)
+            "parent_id": str(fields.get("parent_id", "")).strip()
         })
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows), id_to_task
 
 @router.post("/xmind-delete")
 async def detect_deleted_items(xmind: UploadFile = File(...)):
     xmind_df = extract_xmind_nodes(xmind)
-    pyrus_df = extract_pyrus_data()
+    pyrus_df, id_to_task = extract_pyrus_data_and_map()
 
-    # Очистка ID
+    # Очистка
     xmind_df["id"] = xmind_df["id"].astype(str).str.strip()
     pyrus_df["id"] = pyrus_df["id"].astype(str).str.strip()
 
     # Поиск удалённых
     deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])].copy()
 
-    # Защита от потери pyrus_id
-    if deleted["pyrus_id"].isnull().any():
-        print("WARNING: Some pyrus_id values are missing!")
+    # Восстановление pyrus_id через map
+    deleted["pyrus_id"] = deleted["id"].map(id_to_task)
 
+    # Форматированный вывод
     records = deleted[["id", "parent_id", "level", "title", "body", "pyrus_id"]].to_dict(orient="records")
-
     return {"content": format_as_markdown(records)}
