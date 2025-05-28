@@ -2,7 +2,6 @@ from fastapi import APIRouter, UploadFile, File
 import zipfile, io, json
 import pandas as pd
 from utils.data_loader import get_data
-from tabulate import tabulate
 
 router = APIRouter()
 
@@ -69,17 +68,7 @@ async def detect_deleted_items(xmind: UploadFile = File(...)):
     xmind_df = extract_xmind_nodes(xmind)
     pyrus_df = extract_pyrus_data()
 
-    deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])][
-        ["id", "parent_id", "level", "title", "body", "pyrus_id"]
-    ]
-
-    table = tabulate(
-        deleted.values.tolist(),
-        headers=deleted.columns.tolist(),
-        tablefmt="github"
-    )
-
+    deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])]
     return {
-        "deleted": deleted.to_dict(orient="records"),
-        "table": table
+        "deleted": deleted[["id", "parent_id", "level", "title", "body", "pyrus_id"]].to_dict(orient="records")
     }
