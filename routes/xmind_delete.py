@@ -2,6 +2,7 @@ from fastapi import APIRouter, UploadFile, File
 import zipfile, io, json
 import pandas as pd
 from utils.data_loader import get_data
+from tabulate import tabulate  # ← подключаем tabulate
 
 router = APIRouter()
 
@@ -31,6 +32,7 @@ def extract_xmind_nodes(xmind_file: UploadFile):
     root_topic = content_json[0].get("rootTopic", {})
     return pd.DataFrame(walk(root_topic))
 
+
 def extract_pyrus_data():
     raw = get_data()
     if isinstance(raw, str):
@@ -58,13 +60,17 @@ def extract_pyrus_data():
         })
     return pd.DataFrame(rows)
 
+
 @router.post("/xmind-delete")
 async def detect_deleted_items(xmind: UploadFile = File(...)):
     xmind_df = extract_xmind_nodes(xmind)
     pyrus_df = extract_pyrus_data()
 
-    deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])]
+    deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])][
+        ["id", "parent_id", "level", "title", "body"]
+    ]
 
     return {
-        "deleted": deleted[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
+        "deleted": deleted.to_dict(orient="records"),
+        "table": tabulate(deleted.values.tolist(), headers=deleted.columns.tolist(), tablefmt="github")
     }
