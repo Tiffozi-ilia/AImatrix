@@ -76,4 +76,7 @@ async def detect_updated_items(xmind: UploadFile = File(...)):
         "level_xmind": "level"
     })[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
 
-    return {"content": format_as_markdown(records)}
+    return {
+    "content": format_as_markdown(records),
+    "json": records
+    }
