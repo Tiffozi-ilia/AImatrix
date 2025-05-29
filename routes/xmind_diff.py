@@ -46,4 +46,7 @@ async def xmind_diff(file: UploadFile):
         if n.get("generated") and n["id"] not in pyrus_ids
     ]
 
-    return {"content": format_as_markdown(new_nodes)}
+    return {
+    "content": format_as_markdown(new_nodes),
+    "json": new_nodes
+    }
