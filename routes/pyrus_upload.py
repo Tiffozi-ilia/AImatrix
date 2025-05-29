@@ -1,6 +1,7 @@
 from fastapi import APIRouter, UploadFile, File
 import requests
 from utils.data_loader import get_pyrus_token
+from io import BytesIO  # ← добавлено
 
 router = APIRouter()
 
@@ -23,11 +24,13 @@ async def upload_xmind(file: UploadFile = File(...)):
     token = get_pyrus_token()
     headers = {"Authorization": f"Bearer {token}"}
     file_bytes = await file.read()
-    files = {"xmind": (file.filename, file_bytes, file.content_type)}
+
+    # используем BytesIO для безопасной передачи
+    files_for_diff = {"xmind": (file.filename, BytesIO(file_bytes), file.content_type)}
 
     # 1. Получаем diff для создания
     try:
-        diff_resp = requests.post(f"{LOCAL_URL}/xmind-diff", files=files)
+        diff_resp = requests.post(f"{LOCAL_URL}/xmind-diff", files=files_for_diff)
         diff_resp.raise_for_status()
         diff = diff_resp.json().get("json", [])
     except Exception as e:
