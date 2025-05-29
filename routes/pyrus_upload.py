@@ -17,40 +17,34 @@ FORM_ID = 2309262
 PYRUS_URL = "https://api.pyrus.com/v4"
 LOCAL_URL = "https://aimatrix-e8zs.onrender.com"
 
-def safe_post_json(url: str, files: dict):
-    try:
-        resp = requests.post(url, files=files)
-        resp.raise_for_status()
-        return resp.json().get("json", [])
-    except Exception as e:
-        print(f"[ERROR] {url} →", e)
-        return []
 
 @router.post("/pyrus_upload")
 async def upload_xmind(file: UploadFile = File(...)):
     token = get_pyrus_token()
     headers = {"Authorization": f"Bearer {token}"}
     file_bytes = await file.read()
+    files = {"xmind": (file.filename, file_bytes, file.content_type)}
 
-    def get_files():
-        return {"xmind": (file.filename, file_bytes, file.content_type)}
-
-    # 1. diff, updated, deleted
-    diff = safe_post_json(f"{LOCAL_URL}/xmind-diff", get_files())
-    updated = safe_post_json(f"{LOCAL_URL}/xmind-updated", get_files())
-    deleted = safe_post_json(f"{LOCAL_URL}/xmind-delete", get_files())
-
-    # 2. mapping
+    # 1. Получаем diff для создания
     try:
-        mapped = requests.get(f"{LOCAL_URL}/pyrus_mapping").json().get("actions", [])
+        diff_resp = requests.post(f"{LOCAL_URL}/xmind-diff", files=files)
+        diff_resp.raise_for_status()
+        diff = diff_resp.json().get("json", [])
     except Exception as e:
-        print("[ERROR] /pyrus_mapping →", e)
-        mapped = []
+        return {"error": f"Ошибка на этапе diff: {e}"}
+
+    # 2. Получаем mapping, в котором уже есть update/delete
+    try:
+        mapping_resp = requests.get(f"{LOCAL_URL}/pyrus_mapping")
+        mapping_resp.raise_for_status()
+        mapped = mapping_resp.json().get("actions", [])
+    except Exception as e:
+        return {"error": f"Ошибка на этапе pyrus_mapping: {e}"}
 
     created_ids = []
     errors = []
 
-    # 3. create
+    # 3. Создаём новые элементы в Pyrus
     for item in diff:
         payload = {
             "form_id": FORM_ID,
@@ -70,7 +64,7 @@ async def upload_xmind(file: UploadFile = File(...)):
         except Exception as e:
             errors.append({"id": item["id"], "error": str(e)})
 
-    # 4. update/delete
+    # 4. Выполняем update и delete
     for item in mapped:
         task_id = item.get("task_id")
         if not task_id:
@@ -78,8 +72,11 @@ async def upload_xmind(file: UploadFile = File(...)):
         try:
             if item["action"] == "update":
                 comment = f"Обновлено:\n\n**{item['title']}**\n{item['body']}"
-                requests.post(f"{PYRUS_URL}/tasks/{task_id}/comments",
-                              json={"text": comment}, headers=headers).raise_for_status()
+                requests.post(
+                    f"{PYRUS_URL}/tasks/{task_id}/comments",
+                    json={"text": comment},
+                    headers=headers
+                ).raise_for_status()
             elif item["action"] == "delete":
                 requests.delete(f"{PYRUS_URL}/tasks/{task_id}", headers=headers).raise_for_status()
         except Exception as e:
@@ -88,8 +85,8 @@ async def upload_xmind(file: UploadFile = File(...)):
     return {
         "status": "done",
         "created": len(created_ids),
-        "updated": len([x for x in mapped if x['action'] == 'update']),
-        "deleted": len([x for x in mapped if x['action'] == 'delete']),
+        "updated": len([x for x in mapped if x["action"] == "update"]),
+        "deleted": len([x for x in mapped if x["action"] == "delete"]),
         "pyrus": {
             "created_ids": created_ids,
             "errors": errors
