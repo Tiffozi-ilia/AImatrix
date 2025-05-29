@@ -17,29 +17,40 @@ FORM_ID = 2309262
 PYRUS_URL = "https://api.pyrus.com/v4"
 LOCAL_URL = "https://aimatrix-e8zs.onrender.com"
 
+def safe_post_json(url: str, files: dict):
+    try:
+        resp = requests.post(url, files=files)
+        resp.raise_for_status()
+        return resp.json().get("json", [])
+    except Exception as e:
+        print(f"[ERROR] {url} →", e)
+        return []
+
 @router.post("/pyrus_upload")
 async def upload_xmind(file: UploadFile = File(...)):
     token = get_pyrus_token()
     headers = {"Authorization": f"Bearer {token}"}
+    file_bytes = await file.read()
 
-    files = {"xmind": (file.filename, await file.read(), file.content_type)}
+    def get_files():
+        return {"xmind": (file.filename, file_bytes, file.content_type)}
 
-    # 1. diff
-    diff = requests.post(f"{LOCAL_URL}/xmind-diff", files=files).json().get("json", [])
-    file.file.seek(0)
-    # 2. updated
-    updated = requests.post(f"{LOCAL_URL}/xmind-updated", files=files).json().get("json", [])
-    file.file.seek(0)
-    # 3. deleted
-    deleted = requests.post(f"{LOCAL_URL}/xmind-delete", files=files).json().get("json", [])
+    # 1. diff, updated, deleted
+    diff = safe_post_json(f"{LOCAL_URL}/xmind-diff", get_files())
+    updated = safe_post_json(f"{LOCAL_URL}/xmind-updated", get_files())
+    deleted = safe_post_json(f"{LOCAL_URL}/xmind-delete", get_files())
 
-    # 4. mapping
-    mapped = requests.get(f"{LOCAL_URL}/pyrus_mapping").json().get("actions", [])
+    # 2. mapping
+    try:
+        mapped = requests.get(f"{LOCAL_URL}/pyrus_mapping").json().get("actions", [])
+    except Exception as e:
+        print("[ERROR] /pyrus_mapping →", e)
+        mapped = []
 
-    created_responses = []
+    created_ids = []
     errors = []
 
-    # 5. POST new
+    # 3. create
     for item in diff:
         payload = {
             "form_id": FORM_ID,
@@ -55,34 +66,32 @@ async def upload_xmind(file: UploadFile = File(...)):
         try:
             r = requests.post(f"{PYRUS_URL}/tasks", json=payload, headers=headers)
             r.raise_for_status()
-            created_responses.append(item["id"])
+            created_ids.append(item["id"])
         except Exception as e:
             errors.append({"id": item["id"], "error": str(e)})
 
-    # 6. Update/delete
+    # 4. update/delete
     for item in mapped:
         task_id = item.get("task_id")
         if not task_id:
             continue
-        if item["action"] == "update":
-            comment = f"Обновлено:\n\n**{item['title']}**\n{item['body']}"
-            try:
-                requests.post(f"{PYRUS_URL}/tasks/{task_id}/comments", json={"text": comment}, headers=headers).raise_for_status()
-            except Exception as e:
-                errors.append({"id": item["id"], "error": str(e)})
-        elif item["action"] == "delete":
-            try:
+        try:
+            if item["action"] == "update":
+                comment = f"Обновлено:\n\n**{item['title']}**\n{item['body']}"
+                requests.post(f"{PYRUS_URL}/tasks/{task_id}/comments",
+                              json={"text": comment}, headers=headers).raise_for_status()
+            elif item["action"] == "delete":
                 requests.delete(f"{PYRUS_URL}/tasks/{task_id}", headers=headers).raise_for_status()
-            except Exception as e:
-                errors.append({"id": item["id"], "error": str(e)})
+        except Exception as e:
+            errors.append({"id": item["id"], "error": str(e)})
 
     return {
         "status": "done",
-        "created": len(diff),
+        "created": len(created_ids),
         "updated": len([x for x in mapped if x['action'] == 'update']),
         "deleted": len([x for x in mapped if x['action'] == 'delete']),
         "pyrus": {
-            "created_ids": created_responses,
+            "created_ids": created_ids,
             "errors": errors
         }
     }
