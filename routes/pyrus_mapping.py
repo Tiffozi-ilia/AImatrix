@@ -24,8 +24,8 @@ async def pyrus_mapping():
     task_map = {row["id"]: row["task_id"] for row in rows}
 
     # 3. Получаем изменения из Render-API
-    updated = requests.get("https://aimatrix-e8zs.onrender.com/xmind-updated").json().get("updated", [])
-    deleted = requests.get("https://aimatrix-e8zs.onrender.com/xmind-delete").json().get("deleted", [])
+    updated = requests.get("https://aimatrix-e8zs.onrender.com/xmind-updated").json().get("json", [])
+    deleted = requests.get("https://aimatrix-e8zs.onrender.com/xmind-delete").json().get("json", [])
 
     # 4. Сборка результата
     enriched = []
