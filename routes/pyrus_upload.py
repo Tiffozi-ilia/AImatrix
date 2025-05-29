@@ -15,7 +15,7 @@ FIELD_IDS = {
 
 FORM_ID = 2309262
 PYRUS_URL = "https://api.pyrus.com/v4"
-LOCAL_URL = "http://localhost:8000"
+LOCAL_URL = "https://aimatrix-e8zs.onrender.com"
 
 @router.post("/pyrus_upload")
 async def upload_xmind(file: UploadFile = File(...)):
