@@ -5,7 +5,7 @@ import json
 
 router = APIRouter()
 
-@router.post("/pyrus_mapping")
+@router.get("/pyrus_mapping")
 async def pyrus_mapping(payload: dict = Body(...)):
     url = payload.get("url")
     if not url:
