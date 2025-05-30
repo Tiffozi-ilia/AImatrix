@@ -7,31 +7,25 @@ router = APIRouter()
 
 @router.post("/pyrus_mapping")
 async def pyrus_mapping(url: str = Body(...)):
-    # Получаем задачи из Pyrus
+    # 1. Получаем сырые данные от Pyrus
     raw = requests.get("https://aimatrix-e8zs.onrender.com/json")
     pyrus_json = raw.json()
-
-    # Формируем task_map: {matrix_id → task_id}
-    task_map = {}
+    
+    # 2. Строим map: id → task_id
+    rows = []
     for task in pyrus_json.get("tasks", []):
-        fields = {f["name"]: f.get("value", "") for f in task.get("fields", [])}
+        fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
         matrix_id = fields.get("matrix_id", "").strip()
         task_id = task.get("id")
         if matrix_id:
-            task_map[matrix_id] = task_id
+            rows.append({"id": matrix_id, "task_id": task_id})
+    task_map = {row["id"]: row["task_id"] for row in rows}
 
-    # Вызываем xmind-updated и xmind-delete, передаём URL
-    updated = requests.post(
-        "https://aimatrix-e8zs.onrender.com/xmind-updated",
-        json=url
-    ).json().get("json", [])
+    # 3. Получаем updated и deleted по переданному url
+    updated = requests.post("https://aimatrix-e8zs.onrender.com/xmind-updated", json=url).json().get("json", [])
+    deleted = requests.post("https://aimatrix-e8zs.onrender.com/xmind-delete", json=url).json().get("json", [])
 
-    deleted = requests.post(
-        "https://aimatrix-e8zs.onrender.com/xmind-delete",
-        json=url
-    ).json().get("json", [])
-
-    # Обогащаем действия task_id
+    # 4. Сборка результата
     enriched = []
     for item in updated:
         item["task_id"] = task_map.get(item["id"])
