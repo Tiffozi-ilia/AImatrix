@@ -1,18 +1,17 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Body
 import pandas as pd
 import requests
-import io
 import json
 
 router = APIRouter()
 
-@router.get("/pyrus_mapping")
-async def pyrus_mapping():
-    # 1. Получаем сырые данные от Pyrus (JSON → CSV)
-    raw = requests.get("https://aimatrix-e8zs.onrender.com/json")  # ← если у тебя есть endpoint для json из Pyrus
+@router.post("/pyrus_mapping")
+async def pyrus_mapping(url: str = Body(...)):
+    # 1. Получаем сырые данные от Pyrus
+    raw = requests.get("https://aimatrix-e8zs.onrender.com/json")
     pyrus_json = raw.json()
-    
-    # 2. Парсим в task_map
+
+    # 2. Формируем карту {matrix_id → task_id}
     rows = []
     for task in pyrus_json.get("tasks", []):
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
@@ -20,14 +19,21 @@ async def pyrus_mapping():
         task_id = task.get("id")
         if matrix_id:
             rows.append({"id": matrix_id, "task_id": task_id})
-    
+
     task_map = {row["id"]: row["task_id"] for row in rows}
 
-    # 3. Получаем изменения из Render-API
-    updated = requests.get("https://aimatrix-e8zs.onrender.com/xmind-updated").json().get("json", [])
-    deleted = requests.get("https://aimatrix-e8zs.onrender.com/xmind-delete").json().get("json", [])
+    # 3. Отправляем url в updated и delete
+    updated = requests.post(
+        "https://aimatrix-e8zs.onrender.com/xmind-updated",
+        json=url
+    ).json().get("json", [])
 
-    # 4. Сборка результата
+    deleted = requests.post(
+        "https://aimatrix-e8zs.onrender.com/xmind-delete",
+        json=url
+    ).json().get("json", [])
+
+    # 4. Обогащаем результат
     enriched = []
     for item in updated:
         item["task_id"] = task_map.get(item["id"])
