@@ -140,8 +140,15 @@ async def detect_deleted_items(url: str = Body(...)):
 # === MAPPING ===================================================================
 @router.post("/pyrus_mapping")
 async def pyrus_mapping(url: str = Body(...)):
-    raw = requests.get("https://aimatrix-e8zs.onrender.com/json")
-    pyrus_json = raw.json()
+    import requests
+    import json
+
+    # 1. Получаем task_id из Pyrus
+    try:
+        raw = requests.get("https://aimatrix-e8zs.onrender.com/json")
+        pyrus_json = raw.json()
+    except Exception as e:
+        return {"error": f"Ошибка при загрузке JSON из Pyrus: {str(e)}"}
 
     rows = []
     for task in pyrus_json.get("tasks", []):
@@ -155,9 +162,21 @@ async def pyrus_mapping(url: str = Body(...)):
     headers = {"Content-Type": "application/json"}
     payload = json.dumps(url)
 
-    updated = requests.post("https://aimatrix-e8zs.onrender.com/xmind-updated", data=payload, headers=headers).json().get("json", [])
-    deleted = requests.post("https://aimatrix-e8zs.onrender.com/xmind-delete", data=payload, headers=headers).json().get("json", [])
+    # 2. Получаем updated
+    try:
+        updated_resp = requests.post("https://aimatrix-e8zs.onrender.com/xmind-updated", data=payload, headers=headers)
+        updated = updated_resp.json().get("json", [])
+    except Exception as e:
+        return {"error": f"Ошибка при вызове xmind-updated: {str(e)}"}
 
+    # 3. Получаем deleted
+    try:
+        deleted_resp = requests.post("https://aimatrix-e8zs.onrender.com/xmind-delete", data=payload, headers=headers)
+        deleted = deleted_resp.json().get("json", [])
+    except Exception as e:
+        return {"error": f"Ошибка при вызове xmind-delete: {str(e)}"}
+
+    # 4. Сборка enriched-таблицы
     enriched = []
     for item in updated:
         item["task_id"] = task_map.get(item["id"])
