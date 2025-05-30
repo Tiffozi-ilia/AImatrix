@@ -139,58 +139,60 @@ async def detect_deleted_items(url: str = Body(...)):
 
 # === MAPPING (Stage 1: только CSV из JSON) ====================================
 from fastapi import APIRouter, Body
-import zipfile, io, json, requests
+import requests
+import io
+import json
 from utils.data_loader import get_data
 from utils.diff_engine import format_as_markdown
-from utils.xmind_parser import flatten_xmind_nodes
+from .xmind_procedures import detect_updated_items, detect_deleted_items  # ← прямой импорт
 
 router = APIRouter()
 
-# Переиспользуем внутренние функции напрямую
-from .your_module_file import detect_updated_items, detect_deleted_items  # ← замени на актуальное имя файла
-
 @router.post("/pyrus_mapping")
 async def pyrus_mapping(url: str = Body(...)):
-    # 1. Получаем task_id из Pyrus
     try:
-        raw = requests.get("https://aimatrix-e8zs.onrender.com/json")
-        pyrus_json = raw.json()
+        # Скачиваем xmind
+        content = requests.get(url).content
+        file_like = io.BytesIO(content)
     except Exception as e:
-        return {"error": f"Ошибка при загрузке JSON из Pyrus: {str(e)}"}
+        return {"error": f"Не удалось загрузить XMind: {e}"}
 
-    rows = []
-    for task in pyrus_json.get("tasks", []):
+    # Получаем JSON из Pyrus
+    try:
+        raw = get_data()
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        if isinstance(raw, dict):
+            raw = raw.get("tasks", [])
+    except Exception as e:
+        return {"error": f"Не удалось загрузить JSON из Pyrus: {e}"}
+
+    # Маппинг id → task_id
+    task_map = {}
+    for task in raw:
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
         matrix_id = fields.get("matrix_id", "").strip()
-        task_id = task.get("id")
         if matrix_id:
-            rows.append({"id": matrix_id, "task_id": task_id})
-    task_map = {row["id"]: row["task_id"] for row in rows}
+            task_map[matrix_id] = task.get("id")
 
-    # 2. Прямая подгрузка контента файла
-    try:
-        content = requests.get(url).content
-        xmind_file = io.BytesIO(content)
-    except Exception as e:
-        return {"error": f"Ошибка загрузки файла XMind: {str(e)}"}
+    # Вызываем напрямую функции (без POST)
+    updated_result = await detect_updated_items(url)
+    deleted_result = await detect_deleted_items(url)
 
-    # 3. Вызываем напрямую detect_updated_items и detect_deleted_items
-    updated_raw = await detect_updated_items(url)
-    deleted_raw = await detect_deleted_items(url)
-
-    updated = updated_raw.get("json", [])
-    deleted = deleted_raw.get("json", [])
+    updated_items = updated_result["json"]
+    deleted_items = deleted_result["json"]
 
     enriched = []
-    for item in updated:
+    for item in updated_items:
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "update"
         enriched.append(item)
-
-    for item in deleted:
+    for item in deleted_items:
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "delete"
         enriched.append(item)
 
-    return {"actions": enriched}
-
+    return {
+        "content": format_as_markdown(enriched),
+        "json": enriched
+    }
