@@ -1,15 +1,19 @@
 from fastapi import APIRouter, Body
+from pydantic import BaseModel
 import requests
 import json
 
 router = APIRouter()
 
-@router.post("/pyrus_mapping")
-async def pyrus_mapping(url: str = Body(...)):
-    # 1. Получаем сырые данные от Pyrus
-    pyrus_json = requests.get("https://aimatrix-e8zs.onrender.com/json").json()
+class UrlInput(BaseModel):
+    url: str
 
-    # 2. Строим map: id → task_id
+@router.post("/pyrus_mapping")
+async def pyrus_mapping(body: UrlInput):
+    url = body.url
+
+    # 1. Получаем данные из Pyrus
+    pyrus_json = requests.get("https://aimatrix-e8zs.onrender.com/json").json()
     task_map = {}
     for task in pyrus_json.get("tasks", []):
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
@@ -18,27 +22,14 @@ async def pyrus_mapping(url: str = Body(...)):
         if matrix_id:
             task_map[matrix_id] = task_id
 
-    # 3. Передаём URL в обе процедуры
-    payload = json.dumps({"url": url})
+    # 2. Передаём url в updated/delete
     headers = {"Content-Type": "application/json"}
+    payload = json.dumps({"url": url})
 
-    try:
-        updated_resp = requests.post("https://aimatrix-e8zs.onrender.com/xmind-updated", data=payload, headers=headers)
-        updated_resp.raise_for_status()
-        updated = updated_resp.json().get("json", [])
-    except Exception as e:
-        print(f"[ERROR] xmind-updated: {e}")
-        updated = []
+    updated = requests.post("https://aimatrix-e8zs.onrender.com/xmind-updated", data=payload, headers=headers).json().get("json", [])
+    deleted = requests.post("https://aimatrix-e8zs.onrender.com/xmind-delete", data=payload, headers=headers).json().get("json", [])
 
-    try:
-        deleted_resp = requests.post("https://aimatrix-e8zs.onrender.com/xmind-delete", data=payload, headers=headers)
-        deleted_resp.raise_for_status()
-        deleted = deleted_resp.json().get("json", [])
-    except Exception as e:
-        print(f"[ERROR] xmind-delete: {e}")
-        deleted = []
-
-    # 4. Сборка результата
+    # 3. Сборка результата
     enriched = []
     for item in updated:
         item["task_id"] = task_map.get(item["id"])
