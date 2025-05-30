@@ -138,14 +138,15 @@ async def detect_deleted_items(url: str = Body(...)):
     }
 
 # === MAPPING (Stage 1: только CSV из JSON) ====================================
-@router.post("/pyrus_mapping/csv")
-async def pyrus_mapping_csv(url: str = Body(...)):
+@router.post("/pyrus_mapping")
+async def pyrus_mapping(url: str = Body(...)):
     import requests
     import zipfile
     import io
     import json
     import pandas as pd
 
+    # 1. Скачиваем и парсим XMind
     try:
         content = requests.get(url).content
         with zipfile.ZipFile(io.BytesIO(content)) as z:
@@ -173,6 +174,7 @@ async def pyrus_mapping_csv(url: str = Body(...)):
 
     xmind_df = pd.DataFrame(walk(content_json[0].get("rootTopic", {})))
 
+    # 2. Загружаем данные из Pyrus
     try:
         raw = get_data()
         if isinstance(raw, str):
@@ -189,12 +191,29 @@ async def pyrus_mapping_csv(url: str = Body(...)):
         if matrix_id:
             task_map[matrix_id] = task.get("id")
 
-    xmind_df["task_id"] = xmind_df["id"].map(task_map)
+    # 3. Получаем обновления и удаления
+    updated_result = await detect_updated_items(url)
+    deleted_result = await detect_deleted_items(url)
 
-    records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
+    updated_items = updated_result["json"]
+    deleted_items = deleted_result["json"]
+
+    enriched = []
+    for item in updated_items:
+        item["task_id"] = task_map.get(item["id"])
+        item["action"] = "update"
+        enriched.append(item)
+    for item in deleted_items:
+        item["task_id"] = task_map.get(item["id"])
+        item["action"] = "delete"
+        enriched.append(item)
+
+    # 4. Добавим CSV-таблицу всех элементов XMind (с task_id)
+    xmind_df["task_id"] = xmind_df["id"].map(task_map)
+    csv_records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
 
     return {
-        "content": format_as_markdown(records),
-        "json": records,
-        "rows": len(records)
+        "content": format_as_markdown(enriched),
+        "json": enriched,
+        "rows": csv_records
     }
