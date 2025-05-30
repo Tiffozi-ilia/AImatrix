@@ -21,7 +21,7 @@ async def pyrus_mapping(url: str = Body(...)):
         deleted_json = deleted_resp.json()
 
         # 3. pyrus_mapping (map) — id → task_id
-        map_resp = requests.get(f"{RENDER_URL}/pyrus_mapping_map")
+        map_resp = requests.get(f"{RENDER_URL}/pyrus_mapping")
         map_resp.raise_for_status()
         task_map = map_resp.json()
 
