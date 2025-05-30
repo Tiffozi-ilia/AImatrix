@@ -140,6 +140,10 @@ async def detect_deleted_items(url: str = Body(...)):
 # === MAPPING ===================================================================
 @router.post("/pyrus_mapping")
 async def pyrus_mapping(url: str = Body(...)):
+    import requests
+    import json
+
+    # 1. Получаем task_id из Pyrus
     try:
         raw = requests.get("https://aimatrix-e8zs.onrender.com/json")
         pyrus_json = raw.json()
@@ -153,17 +157,34 @@ async def pyrus_mapping(url: str = Body(...)):
         task_id = task.get("id")
         if matrix_id:
             rows.append({"id": matrix_id, "task_id": task_id})
+    task_map = {row["id"]: row["task_id"] for row in rows}
 
-    # Создаём CSV в памяти
-    df = pd.DataFrame(rows)
-    csv_buffer = io.StringIO()
-    df.to_csv(csv_buffer, index=False)
+    headers = {"Content-Type": "application/json"}
+    payload = json.dumps(url)
 
-    # Кодируем в base64 для передачи
-    csv_base64 = base64.b64encode(csv_buffer.getvalue().encode("utf-8")).decode("utf-8")
+    # 2. Получаем updated
+    try:
+        updated_resp = requests.post("https://aimatrix-e8zs.onrender.com/xmind-updated", data=payload, headers=headers)
+        updated = updated_resp.json().get("json", [])
+    except Exception as e:
+        return {"error": f"Ошибка при вызове xmind-updated: {str(e)}"}
 
-    return {
-        "rows": rows,
-        "csv_base64": csv_base64
-    }
+    # 3. Получаем deleted
+    try:
+        deleted_resp = requests.post("https://aimatrix-e8zs.onrender.com/xmind-delete", data=payload, headers=headers)
+        deleted = deleted_resp.json().get("json", [])
+    except Exception as e:
+        return {"error": f"Ошибка при вызове xmind-delete: {str(e)}"}
 
+    # 4. Сборка enriched-таблицы
+    enriched = []
+    for item in updated:
+        item["task_id"] = task_map.get(item["id"])
+        item["action"] = "update"
+        enriched.append(item)
+    for item in deleted:
+        item["task_id"] = task_map.get(item["id"])
+        item["action"] = "delete"
+        enriched.append(item)
+
+    return {"actions": enriched}
