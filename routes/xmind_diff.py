@@ -7,9 +7,8 @@ import zipfile, io, json
 router = APIRouter()
 
 @router.post("/xmind-diff")
-async def xmind_diff(file: UploadFile):
-    # Читаем .xmind файл как zip
-    content = await file.read()
+async def xmind_diff_from_url(url: str):
+    content = requests.get(url).content
     with zipfile.ZipFile(io.BytesIO(content)) as z:
         content_json = json.loads(z.read("content.json"))
 
