@@ -8,59 +8,42 @@ from utils.xmind_parser import flatten_xmind_nodes
 router = APIRouter()
 
 # === DIFF ======================================================================
-@router.post("/pyrus_mapping")
-async def pyrus_mapping(url: str = Body(...)):
-    import requests
-    import json
+@router.post("/xmind-diff")
+async def xmind_diff(url: str = Body(...)):
+    content = requests.get(url).content
+    with zipfile.ZipFile(io.BytesIO(content)) as z:
+        content_json = json.loads(z.read("content.json"))
 
-    # Получаем Pyrus JSON
-    try:
-        raw = requests.get("https://aimatrix-e8zs.onrender.com/json")
-        pyrus_json = raw.json()
-    except Exception as e:
-        return {"error": f"Pyrus JSON fetch failed: {str(e)}"}
+    flat_xmind = flatten_xmind_nodes(content_json)
 
-    task_map = {}
-    for task in pyrus_json.get("tasks", []):
-        fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
-        matrix_id = fields.get("matrix_id", "").strip()
-        task_id = task.get("id")
-        if matrix_id:
-            task_map[matrix_id] = task_id
+    raw_data = get_data()
+    if isinstance(raw_data, str):
+        try:
+            raw_data = json.loads(raw_data)
+        except json.JSONDecodeError:
+            raw_data = [json.loads(line) for line in raw_data.splitlines() if line.strip()]
+    if isinstance(raw_data, dict):
+        for value in raw_data.values():
+            if isinstance(value, list):
+                raw_data = value
+                break
+    if not isinstance(raw_data, list):
+        raise ValueError("Pyrus data is not a list")
 
-    headers = {"Content-Type": "application/json"}
-    payload = json.dumps(url)
+    pyrus_ids = {
+        item["id"] for item in raw_data
+        if isinstance(item, dict) and "id" in item
+    }
 
-    # UPDATED
-    try:
-        updated_resp = requests.post("https://aimatrix-e8zs.onrender.com/xmind-updated", data=payload, headers=headers)
-        if updated_resp.status_code != 200:
-            return {"error": f"updated failed: {updated_resp.status_code}", "body": updated_resp.text}
-        updated = updated_resp.json().get("json", [])
-    except Exception as e:
-        return {"error": f"Exception in xmind-updated: {str(e)}"}
+    new_nodes = [
+        n for n in flat_xmind
+        if n.get("generated") and n["id"] not in pyrus_ids
+    ]
 
-    # DELETED
-    try:
-        deleted_resp = requests.post("https://aimatrix-e8zs.onrender.com/xmind-delete", data=payload, headers=headers)
-        if deleted_resp.status_code != 200:
-            return {"error": f"deleted failed: {deleted_resp.status_code}", "body": deleted_resp.text}
-        deleted = deleted_resp.json().get("json", [])
-    except Exception as e:
-        return {"error": f"Exception in xmind-delete: {str(e)}"}
-
-    enriched = []
-    for item in updated:
-        item["task_id"] = task_map.get(item["id"])
-        item["action"] = "update"
-        enriched.append(item)
-    for item in deleted:
-        item["task_id"] = task_map.get(item["id"])
-        item["action"] = "delete"
-        enriched.append(item)
-
-    return {"actions": enriched}
-
+    return {
+        "content": format_as_markdown(new_nodes),
+        "json": new_nodes
+    }
 
 # === SHARED PARSERS ============================================================
 def extract_xmind_nodes(file: io.BytesIO):
