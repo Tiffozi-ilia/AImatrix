@@ -140,9 +140,6 @@ async def detect_deleted_items(url: str = Body(...)):
 # === MAPPING ===================================================================
 @router.post("/pyrus_mapping")
 async def pyrus_mapping(url: str = Body(...)):
-    import requests
-    import json
-
     # 1. Получаем task_id из Pyrus
     try:
         raw = requests.get("https://aimatrix-e8zs.onrender.com/json")
@@ -157,34 +154,17 @@ async def pyrus_mapping(url: str = Body(...)):
         task_id = task.get("id")
         if matrix_id:
             rows.append({"id": matrix_id, "task_id": task_id})
-    task_map = {row["id"]: row["task_id"] for row in rows}
 
-    headers = {"Content-Type": "application/json"}
-    payload = json.dumps(url)
+    if not rows:
+        return {"error": "Не найдено ни одного matrix_id"}
 
-    # 2. Получаем updated
-    try:
-        updated_resp = requests.post("https://aimatrix-e8zs.onrender.com/xmind-updated", data=payload, headers=headers)
-        updated = updated_resp.json().get("json", [])
-    except Exception as e:
-        return {"error": f"Ошибка при вызове xmind-updated: {str(e)}"}
+    # 2. Преобразуем в CSV и возвращаем как base64-строку
+    df = pd.DataFrame(rows)
+    buffer = io.StringIO()
+    df.to_csv(buffer, index=False, encoding="utf-8-sig")
+    csv_data = buffer.getvalue()
 
-    # 3. Получаем deleted
-    try:
-        deleted_resp = requests.post("https://aimatrix-e8zs.onrender.com/xmind-delete", data=payload, headers=headers)
-        deleted = deleted_resp.json().get("json", [])
-    except Exception as e:
-        return {"error": f"Ошибка при вызове xmind-delete: {str(e)}"}
-
-    # 4. Сборка enriched-таблицы
-    enriched = []
-    for item in updated:
-        item["task_id"] = task_map.get(item["id"])
-        item["action"] = "update"
-        enriched.append(item)
-    for item in deleted:
-        item["task_id"] = task_map.get(item["id"])
-        item["action"] = "delete"
-        enriched.append(item)
-
-    return {"actions": enriched}
+    return {
+        "rows": rows,
+        "csv_base64": base64.b64encode(csv_data.encode("utf-8-sig")).decode("utf-8")
+    }
