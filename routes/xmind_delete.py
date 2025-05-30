@@ -1,13 +1,13 @@
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, Body, HTTPException
 import zipfile, io, json
 import pandas as pd
+import requests
 from utils.data_loader import get_data
 from utils.diff_engine import format_as_markdown
 
 router = APIRouter()
 
-def extract_xmind_nodes(xmind_file: UploadFile):
-    content = xmind_file.file.read()
+def extract_xmind_nodes_from_bytes(content: bytes):
     with zipfile.ZipFile(io.BytesIO(content)) as z:
         content_json = json.loads(z.read("content.json"))
 
@@ -55,20 +55,29 @@ def extract_pyrus_data():
             "title": fields.get("title", "").strip(),
             "body": fields.get("body", "").strip(),
             "level": str(fields.get("level", "")).strip(),
-            "parent_id": fields.get("parent_id", "").strip(),            
+            "parent_id": fields.get("parent_id", "").strip(),
         })
     return pd.DataFrame(rows)
 
+
 @router.post("/xmind-delete")
-async def detect_deleted_items(xmind: UploadFile = File(...)):
-    xmind_df = extract_xmind_nodes(xmind)
+async def detect_deleted_items(payload: dict = Body(...)):
+    url = payload.get("url")
+    if not url:
+        raise HTTPException(status_code=400, detail="Missing 'url' in request body")
+
+    try:
+        content = requests.get(url).content
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error downloading file: {e}")
+
+    xmind_df = extract_xmind_nodes_from_bytes(content)
     pyrus_df = extract_pyrus_data()
 
     deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])]
-
     records = deleted[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
 
     return {
-    "content": format_as_markdown(records),
-    "json": records
+        "content": format_as_markdown(records),
+        "json": records
     }
