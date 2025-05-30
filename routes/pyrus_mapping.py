@@ -8,7 +8,7 @@ router = APIRouter()
 class UrlInput(BaseModel):
     url: str
 
-@router.post("/split_url_to_update_delete")
+@router.post("/pyrus_mapping")
 async def split_url(body: UrlInput):
     url = body.url
     payload = json.dumps({"url": url})
