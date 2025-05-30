@@ -138,61 +138,39 @@ async def detect_deleted_items(url: str = Body(...)):
     }
 
 # === MAPPING (Stage 1: только CSV из JSON) ====================================
-from fastapi import APIRouter, Body
-import requests
-import io
-import json
-from utils.data_loader import get_data
-from utils.diff_engine import format_as_markdown
-from .xmind_procedures import detect_updated_items, detect_deleted_items  # ← прямой импорт
-
-router = APIRouter()
-
 @router.post("/pyrus_mapping")
-async def pyrus_mapping(url: str = Body(...)):
-    try:
-        # Скачиваем xmind
-        content = requests.get(url).content
-        file_like = io.BytesIO(content)
-    except Exception as e:
-        return {"error": f"Не удалось загрузить XMind: {e}"}
+async def pyrus_mapping(url: str = Body(...)):  # тело нужно, чтобы не ругался FastAPI
+    import base64
+    import io
 
-    # Получаем JSON из Pyrus
+    # 1. Загружаем JSON из Pyrus
     try:
-        raw = get_data()
-        if isinstance(raw, str):
-            raw = json.loads(raw)
-        if isinstance(raw, dict):
-            raw = raw.get("tasks", [])
+        response = requests.get("https://aimatrix-e8zs.onrender.com/json")
+        pyrus_json = response.json()
     except Exception as e:
-        return {"error": f"Не удалось загрузить JSON из Pyrus: {e}"}
+        return {"error": f"Ошибка при загрузке JSON из Pyrus: {str(e)}"}
 
-    # Маппинг id → task_id
-    task_map = {}
-    for task in raw:
+    # 2. Извлекаем matrix_id → task_id
+    rows = []
+    for task in pyrus_json.get("tasks", []):
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
         matrix_id = fields.get("matrix_id", "").strip()
+        task_id = task.get("id")
         if matrix_id:
-            task_map[matrix_id] = task.get("id")
+            rows.append({"id": matrix_id, "task_id": task_id})
 
-    # Вызываем напрямую функции (без POST)
-    updated_result = await detect_updated_items(url)
-    deleted_result = await detect_deleted_items(url)
+    if not rows:
+        return {"error": "Не найдено matrix_id в JSON"}
 
-    updated_items = updated_result["json"]
-    deleted_items = deleted_result["json"]
+    # 3. Генерируем CSV и кодируем в base64
+    df = pd.DataFrame(rows)
+    buffer = io.StringIO()
+    df.to_csv(buffer, index=False, encoding="utf-8-sig")
+    csv_data = buffer.getvalue()
+    csv_base64 = base64.b64encode(csv_data.encode("utf-8-sig")).decode("utf-8")
 
-    enriched = []
-    for item in updated_items:
-        item["task_id"] = task_map.get(item["id"])
-        item["action"] = "update"
-        enriched.append(item)
-    for item in deleted_items:
-        item["task_id"] = task_map.get(item["id"])
-        item["action"] = "delete"
-        enriched.append(item)
-
+    # 4. Ответ
     return {
-        "content": format_as_markdown(enriched),
-        "json": enriched
+        "rows": rows,
+        "csv_base64": csv_base64
     }
