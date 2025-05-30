@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Body
-import pandas as pd
 import requests
 import json
 
@@ -8,22 +7,36 @@ router = APIRouter()
 @router.post("/pyrus_mapping")
 async def pyrus_mapping(url: str = Body(...)):
     # 1. Получаем сырые данные от Pyrus
-    raw = requests.get("https://aimatrix-e8zs.onrender.com/json")
-    pyrus_json = raw.json()
-    
+    pyrus_json = requests.get("https://aimatrix-e8zs.onrender.com/json").json()
+
     # 2. Строим map: id → task_id
-    rows = []
+    task_map = {}
     for task in pyrus_json.get("tasks", []):
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
         matrix_id = fields.get("matrix_id", "").strip()
         task_id = task.get("id")
         if matrix_id:
-            rows.append({"id": matrix_id, "task_id": task_id})
-    task_map = {row["id"]: row["task_id"] for row in rows}
+            task_map[matrix_id] = task_id
 
-    # 3. Получаем updated и deleted по переданному url
-    updated = requests.post("https://aimatrix-e8zs.onrender.com/xmind-updated", json=url).json().get("json", [])
-    deleted = requests.post("https://aimatrix-e8zs.onrender.com/xmind-delete", json=url).json().get("json", [])
+    # 3. Передаём URL в обе процедуры
+    payload = json.dumps({"url": url})
+    headers = {"Content-Type": "application/json"}
+
+    try:
+        updated_resp = requests.post("https://aimatrix-e8zs.onrender.com/xmind-updated", data=payload, headers=headers)
+        updated_resp.raise_for_status()
+        updated = updated_resp.json().get("json", [])
+    except Exception as e:
+        print(f"[ERROR] xmind-updated: {e}")
+        updated = []
+
+    try:
+        deleted_resp = requests.post("https://aimatrix-e8zs.onrender.com/xmind-delete", data=payload, headers=headers)
+        deleted_resp.raise_for_status()
+        deleted = deleted_resp.json().get("json", [])
+    except Exception as e:
+        print(f"[ERROR] xmind-delete: {e}")
+        deleted = []
 
     # 4. Сборка результата
     enriched = []
