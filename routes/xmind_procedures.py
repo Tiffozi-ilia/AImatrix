@@ -138,16 +138,14 @@ async def detect_deleted_items(url: str = Body(...)):
     }
 
 # === MAPPING ===================================================================
-@router.get("/pyrus_mapping")
-async def pyrus_mapping():
+@router.post("/pyrus_mapping")
+async def pyrus_mapping(url: str = Body(...)):
     try:
-        # 1. Получаем JSON из Pyrus
         raw = requests.get("https://aimatrix-e8zs.onrender.com/json")
         pyrus_json = raw.json()
     except Exception as e:
         return {"error": f"Ошибка при загрузке JSON из Pyrus: {str(e)}"}
 
-    # 2. Извлекаем matrix_id и task_id
     rows = []
     for task in pyrus_json.get("tasks", []):
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
@@ -156,15 +154,13 @@ async def pyrus_mapping():
         if matrix_id:
             rows.append({"id": matrix_id, "task_id": task_id})
 
-    if not rows:
-        return {"error": "Не найдено ни одного matrix_id"}
-
-    # 3. Преобразуем в CSV → base64
+    # Создаём CSV в памяти
     df = pd.DataFrame(rows)
-    buffer = io.StringIO()
-    df.to_csv(buffer, index=False, encoding="utf-8-sig")
-    csv_data = buffer.getvalue()
-    csv_base64 = base64.b64encode(csv_data.encode("utf-8-sig")).decode("utf-8")
+    csv_buffer = io.StringIO()
+    df.to_csv(csv_buffer, index=False)
+
+    # Кодируем в base64 для передачи
+    csv_base64 = base64.b64encode(csv_buffer.getvalue().encode("utf-8")).decode("utf-8")
 
     return {
         "rows": rows,
