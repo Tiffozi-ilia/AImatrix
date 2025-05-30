@@ -14,13 +14,22 @@ def find_new_nodes(flat_xmind, existing_ids):
     return new_nodes
 
 
-def format_as_markdown(nodes):
-    if not nodes:
-        return "Новых элементов не найдено."
+def format_as_markdown(items: list[dict]) -> str:
+    if not items:
+        return "⚠️ Нет данных"
 
-    header = "| id | parent_id | level | title | body |\n|---|---|---|---|---|"
-    rows = [
-        f"| {n['id']} | {n['parent_id']} | {n['level']} | {n['title']} | {n['body']} |"
-        for n in nodes
-    ]
-    return "\n".join([header] + rows)
+    # Собираем все уникальные ключи по всем строкам
+    headers = set()
+    for item in items:
+        headers.update(item.keys())
+    headers = list(headers)
+
+    # Заголовок
+    table = ["| " + " | ".join(headers) + " |",
+             "| " + " | ".join(["---"] * len(headers)) + " |"]
+
+    for item in items:
+        row = [str(item.get(h, "")).replace("\n", "<br>") for h in headers]
+        table.append("| " + " | ".join(row) + " |")
+
+    return "\n".join(table)
