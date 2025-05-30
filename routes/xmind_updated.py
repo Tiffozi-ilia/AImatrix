@@ -1,14 +1,13 @@
-from fastapi import APIRouter, UploadFile, File
-import zipfile, io, json
+from fastapi import APIRouter, Body
+import zipfile, io, json, requests
 import pandas as pd
 from utils.data_loader import get_data
 from utils.diff_engine import format_as_markdown
 
 router = APIRouter()
 
-def extract_xmind_nodes(xmind_file: UploadFile):
-    content = xmind_file.file.read()
-    with zipfile.ZipFile(io.BytesIO(content)) as z:
+def extract_xmind_nodes(file: io.BytesIO):
+    with zipfile.ZipFile(file) as z:
         content_json = json.loads(z.read("content.json"))
 
     def walk(node, parent_id="", level=0):
@@ -60,15 +59,15 @@ def extract_pyrus_data():
     return pd.DataFrame(rows)
 
 @router.post("/xmind-updated")
-async def detect_updated_items(xmind: UploadFile = File(...)):
-    xmind_df = extract_xmind_nodes(xmind)
+async def detect_updated_items(url: str = Body(...)):
+    content = requests.get(url).content
+    xmind_df = extract_xmind_nodes(io.BytesIO(content))
     pyrus_df = extract_pyrus_data()
 
     merged = pd.merge(xmind_df, pyrus_df, on="id", suffixes=("_xmind", "_pyrus"))
     diffs = merged[(merged["title_xmind"] != merged["title_pyrus"]) |
                    (merged["body_xmind"] != merged["body_pyrus"])]
 
-    # Возвращаем итоговые актуальные значения из XMind в виде markdown-таблицы
     records = diffs.rename(columns={
         "title_xmind": "title",
         "body_xmind": "body",
@@ -77,6 +76,6 @@ async def detect_updated_items(xmind: UploadFile = File(...)):
     })[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
 
     return {
-    "content": format_as_markdown(records),
-    "json": records
+        "content": format_as_markdown(records),
+        "json": records
     }
