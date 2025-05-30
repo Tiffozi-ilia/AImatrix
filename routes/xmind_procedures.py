@@ -138,39 +138,63 @@ async def detect_deleted_items(url: str = Body(...)):
     }
 
 # === MAPPING (Stage 1: только CSV из JSON) ====================================
-@router.post("/pyrus_mapping")
-async def pyrus_mapping(url: str = Body(...)):  # тело нужно, чтобы не ругался FastAPI
-    import base64
+@router.post("/pyrus_mapping/csv")
+async def pyrus_mapping_csv(url: str = Body(...)):
+    import requests
+    import zipfile
     import io
+    import json
+    import pandas as pd
 
-    # 1. Загружаем JSON из Pyrus
     try:
-        response = requests.get("https://aimatrix-e8zs.onrender.com/json")
-        pyrus_json = response.json()
+        content = requests.get(url).content
+        with zipfile.ZipFile(io.BytesIO(content)) as z:
+            content_json = json.loads(z.read("content.json"))
     except Exception as e:
-        return {"error": f"Ошибка при загрузке JSON из Pyrus: {str(e)}"}
+        return {"error": f"Не удалось загрузить XMind: {e}"}
 
-    # 2. Извлекаем matrix_id → task_id
-    rows = []
-    for task in pyrus_json.get("tasks", []):
+    def walk(node, parent_id="", level=0):
+        label = node.get("labels", [])
+        node_id = label[0] if label else None
+        title = node.get("title", "")
+        body = node.get("notes", {}).get("plain", {}).get("content", "")
+        rows = []
+        if node_id:
+            rows.append({
+                "id": node_id.strip(),
+                "title": title.strip(),
+                "body": body.strip(),
+                "level": str(level),
+                "parent_id": parent_id.strip()
+            })
+        for child in node.get("children", {}).get("attached", []):
+            rows.extend(walk(child, node_id, level + 1))
+        return rows
+
+    xmind_df = pd.DataFrame(walk(content_json[0].get("rootTopic", {})))
+
+    try:
+        raw = get_data()
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        if isinstance(raw, dict):
+            raw = raw.get("tasks", [])
+    except Exception as e:
+        return {"error": f"Не удалось загрузить JSON из Pyrus: {e}"}
+
+    task_map = {}
+    for task in raw:
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
         matrix_id = fields.get("matrix_id", "").strip()
-        task_id = task.get("id")
         if matrix_id:
-            rows.append({"id": matrix_id, "task_id": task_id})
+            task_map[matrix_id] = task.get("id")
 
-    if not rows:
-        return {"error": "Не найдено matrix_id в JSON"}
+    xmind_df["task_id"] = xmind_df["id"].map(task_map)
 
-    # 3. Генерируем CSV и кодируем в base64
-    df = pd.DataFrame(rows)
-    buffer = io.StringIO()
-    df.to_csv(buffer, index=False, encoding="utf-8-sig")
-    csv_data = buffer.getvalue()
-    csv_base64 = base64.b64encode(csv_data.encode("utf-8-sig")).decode("utf-8")
+    records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
 
-    # 4. Ответ
     return {
-        "rows": rows,
-        "csv_base64": csv_base64
+        "content": format_as_markdown(records),
+        "json": records,
+        "rows": len(records)
     }
