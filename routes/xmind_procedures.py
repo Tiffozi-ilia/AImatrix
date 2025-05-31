@@ -273,47 +273,79 @@ async def pyrus_mapping(url: str = Body(...)):
 @router.post("/xmind_apply")
 async def xmind_apply(url: str = Body(...)):
     from utils.data_loader import get_pyrus_token
-    import requests
 
-    # 1. Загружаем изменения
-    headers = {"Content-Type": "application/json"}
-    payload = json.dumps(url)
-
-    base = "https://aimatrix-e8zs.onrender.com"
-    endpoints = {
-        "new": f"{base}/xmind-diff",
-        "updated": f"{base}/xmind-updated",
-        "deleted": f"{base}/xmind-delete",
-        "mapping": f"{base}/pyrus_mapping"
-    }
-
-    print("=== Получаем изменения ===")
+    # 1. Загружаем XMind 1 раз
     try:
-        diff_resp = requests.post(endpoints["new"], data=payload, headers=headers).json()
-        upd_resp = requests.post(endpoints["updated"], data=payload, headers=headers).json()
-        del_resp = requests.post(endpoints["deleted"], data=payload, headers=headers).json()
+        content = requests.get(url).content
+        with zipfile.ZipFile(io.BytesIO(content)) as z:
+            content_json = json.loads(z.read("content.json"))
     except Exception as e:
-        return {"error": f"Ошибка при получении изменений: {e}"}
+        return {"error": f"Ошибка при загрузке XMind: {e}"}
 
-    diff_items = diff_resp.get("json", [])
-    upd_items = upd_resp.get("json", [])
-    del_items = del_resp.get("json", [])
+    # 2. Парсим
+    flat_xmind = flatten_xmind_nodes(content_json)
 
-    # 2. Получаем token
+    # 3. Получаем данные Pyrus
+    raw_data = get_data()
+    raw_data = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+    pyrus_df = extract_pyrus_data()
+
+    # 4. Определим diff/updated/deleted локально
+    # --- UPDATED
+    xmind_df = pd.DataFrame(flat_xmind)
+    merged = pd.merge(xmind_df, pyrus_df, on="id", suffixes=("_xmind", "_pyrus"))
+    updated_items = merged[(merged["title_xmind"] != merged["title_pyrus"]) |
+                           (merged["body_xmind"] != merged["body_pyrus"])]
+    updated_records = updated_items.rename(columns={
+        "title_xmind": "title",
+        "body_xmind": "body",
+        "parent_id_xmind": "parent_id",
+        "level_xmind": "level"
+    })[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
+
+    # --- DELETED
+    deleted_df = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])]
+    deleted_records = deleted_df[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
+
+    # --- DIFF
+    pyrus_ids = {row["id"] for _, row in pyrus_df.iterrows()}
+    used_ids = set(pyrus_ids)
+    max_numbers = {}
+    for item_id in used_ids:
+        if "." in item_id:
+            *base, num = item_id.split(".")
+            base_str = ".".join(base)
+            max_numbers[base_str] = max(max_numbers.get(base_str, 0), int(num))
+
+    new_items = []
+    for node in flat_xmind:
+        node_id = node.get("id")
+        parent_id = node.get("parent_id", "")
+        if not node_id or node_id in used_ids:
+            base = parent_id or "x"
+            max_num = max_numbers.get(base, 0) + 1
+            new_id = f"{base}.{str(max_num).zfill(2)}"
+            node["id"] = new_id
+            max_numbers[base] = max_num
+            used_ids.add(new_id)
+            node["generated"] = True
+            new_items.append(node)
+
+    # 5. Получаем token
     token = get_pyrus_token()
     headers_api = {"Authorization": f"Bearer {token}"}
 
-    # 3. Загрузка новых задач
+    # 6. Создаём задачи
     created = []
-    for item in diff_items:
+    for item in new_items:
         data = {
             "form_id": 2309262,
             "fields": [
                 {"id": 1, "value": item["id"]},
-                {"id": 2, "value": item["level"]},
-                {"id": 3, "value": item["title"]},
-                {"id": 4, "value": item["parent_id"]},
-                {"id": 5, "value": item["body"]},
+                {"id": 2, "value": item.get("level", "")},
+                {"id": 3, "value": item.get("title", "")},
+                {"id": 4, "value": item.get("parent_id", "")},
+                {"id": 5, "value": item.get("body", "")},
             ]
         }
         try:
@@ -322,10 +354,16 @@ async def xmind_apply(url: str = Body(...)):
         except Exception as e:
             created.append({"id": item["id"], "error": str(e)})
 
-    # 4. Обновление комментариями
+    # 7. Обновляем
+    task_map = {}
+    for task in raw_data.get("tasks", []):
+        fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
+        mid = fields.get("matrix_id", "").strip()
+        task_map[mid] = task.get("id")
+
     updated = []
-    for item in upd_items:
-        task_id = item.get("task_id")
+    for item in updated_records:
+        task_id = task_map.get(item["id"])
         if not task_id:
             continue
         body = f"🔄 Обновление из XMind\nTitle: {item['title']}\nBody: {item['body']}"
@@ -336,10 +374,10 @@ async def xmind_apply(url: str = Body(...)):
         except Exception as e:
             updated.append({"id": item["id"], "task_id": task_id, "error": str(e)})
 
-    # 5. Удаление задач
+    # 8. Удаляем
     deleted = []
-    for item in del_items:
-        task_id = item.get("task_id")
+    for item in deleted_records:
+        task_id = task_map.get(item["id"])
         if not task_id:
             continue
         try:
