@@ -191,19 +191,13 @@ async def pyrus_mapping(url: str = Body(...)):
         if matrix_id:
             task_map[matrix_id] = task.get("id")
 
-    # 3. Получаем обновления, удаления и новые элементы
+    # 3. Получаем обновления и удаления
     updated_result = await detect_updated_items(url)
     deleted_result = await detect_deleted_items(url)
-    
+
     updated_items = updated_result["json"]
     deleted_items = deleted_result["json"]
-    
-    # Новые элементы — на основе flat_xmind
-    flat_xmind = xmind_df.to_dict(orient="records")
-    existing_ids = set(task_map.keys())
-    new_items = find_new_nodes(flat_xmind, existing_ids)  # ← уже добавляет action = new
-    
-    # Обогащаем
+
     enriched = []
     for item in updated_items:
         item["task_id"] = task_map.get(item["id"])
@@ -213,11 +207,6 @@ async def pyrus_mapping(url: str = Body(...)):
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "delete"
         enriched.append(item)
-    for item in new_items:
-        item["task_id"] = None  # новых задач ещё нет в Pyrus
-        # action уже установлен как "new"
-        enriched.append(item)
-
 
     # 4. Добавим CSV-таблицу всех элементов XMind (с task_id)
     xmind_df["task_id"] = xmind_df["id"].map(task_map)
