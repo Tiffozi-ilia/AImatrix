@@ -30,41 +30,66 @@ async def xmind_diff(url: str = Body(...)):
     if not isinstance(raw_data, list):
         raise ValueError("Pyrus data is not a list")
 
+    # Собираем все существующие ID из Pyrus
     pyrus_ids = {
         item["id"] for item in raw_data
         if isinstance(item, dict) and "id" in item
     }
 
-    # Решение проблемы генерации ID
-    used_ids = set(pyrus_ids)
+    # Создаем словарь для отслеживания максимальных номеров для каждого родителя
+    max_numbers = {}
+    all_existing_ids = set(pyrus_ids)
+    
+    # Анализируем существующие ID, чтобы найти максимальные номера
+    for item_id in all_existing_ids:
+        if '.' in item_id:
+            base, number_part = item_id.rsplit('.', 1)
+            if number_part.isdigit():
+                number = int(number_part)
+                if base not in max_numbers or number > max_numbers[base]:
+                    max_numbers[base] = number
+    
+    # Анализируем ID из XMind, чтобы обновить максимальные номера
+    for node in flat_xmind:
+        node_id = node.get("id")
+        if node_id and '.' in node_id:
+            base, number_part = node_id.rsplit('.', 1)
+            if number_part.isdigit():
+                number = int(number_part)
+                if base not in max_numbers or number > max_numbers[base]:
+                    max_numbers[base] = number
+    
+    used_ids = set(all_existing_ids)
     new_nodes = []
-    id_counter = {}
     
     for node in flat_xmind:
         node_id = node.get("id")
-        parent_id = node.get("parent_id")
+        parent_id = node.get("parent_id", "")
         
         # Если ID отсутствует или конфликтует
         if not node_id or node_id in used_ids:
-            # Генерация нового ID вида родитель.номер
+            # Определяем базовый префикс
             base = parent_id if parent_id else "x"
-            if base not in id_counter:
-                id_counter[base] = 1
             
-            # Генерируем уникальный ID
-            while True:
-                new_id = f"{base}.{str(id_counter[base]).zfill(2)}"
-                if new_id not in used_ids:
-                    break
-                id_counter[base] += 1
+            # Получаем текущий максимальный номер для этого базового префикса
+            current_max = max_numbers.get(base, 0)
+            new_number = current_max + 1
+            
+            # Генерируем новый ID
+            new_id = f"{base}.{str(new_number).zfill(2)}"
             
             # Обновляем данные узла
             node["id"] = new_id
             node["generated"] = True
-            id_counter[base] += 1
+            
+            # Обновляем максимальный номер для этого базового префикса
+            max_numbers[base] = new_number
+        else:
+            # Если ID валиден, сохраняем его как использованный
+            used_ids.add(node_id)
         
         # Добавляем в new_nodes если это новый узел
-        if node["generated"] and node["id"] not in pyrus_ids:
+        if node.get("generated") and node["id"] not in pyrus_ids:
             new_nodes.append(node)
             used_ids.add(node["id"])
 
