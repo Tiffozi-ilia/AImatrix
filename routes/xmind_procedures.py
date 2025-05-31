@@ -138,6 +138,8 @@ async def detect_deleted_items(url: str = Body(...)):
     }
 
 # === MAPPING (Stage 1: только CSV из JSON) ====================================
+# ... предыдущий код без изменений ...
+
 # === MAPPING (Stage 1: только CSV из JSON) ====================================
 @router.post("/pyrus_mapping")
 async def pyrus_mapping(url: str = Body(...)):
@@ -155,25 +157,9 @@ async def pyrus_mapping(url: str = Body(...)):
     except Exception as e:
         return {"error": f"Не удалось загрузить XMind: {e}"}
 
-    def walk(node, parent_id="", level=0):
-        label = node.get("labels", [])
-        node_id = label[0] if label else None
-        title = node.get("title", "")
-        body = node.get("notes", {}).get("plain", {}).get("content", "")
-        rows = []
-        if node_id:
-            rows.append({
-                "id": node_id.strip(),
-                "title": title.strip(),
-                "body": body.strip(),
-                "level": str(level),
-                "parent_id": parent_id.strip()
-            })
-        for child in node.get("children", {}).get("attached", []):
-            rows.extend(walk(child, node_id, level + 1))
-        return rows
-
-    xmind_df = pd.DataFrame(walk(content_json[0].get("rootTopic", {})))
+    # Используем flatten_xmind_nodes для получения новых элементов
+    flat_xmind = flatten_xmind_nodes(content_json)
+    new_nodes = [n for n in flat_xmind if n.get("generated")]
 
     # 2. Загружаем данные из Pyrus
     try:
@@ -185,6 +171,7 @@ async def pyrus_mapping(url: str = Body(...)):
     except Exception as e:
         return {"error": f"Не удалось загрузить JSON из Pyrus: {e}"}
 
+    # Строим маппинг ID задач
     task_map = {}
     for task in raw:
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
@@ -192,41 +179,43 @@ async def pyrus_mapping(url: str = Body(...)):
         if matrix_id:
             task_map[matrix_id] = task.get("id")
 
-    headers = {"Content-Type": "application/json"}
-    payload = json.dumps({"url": url})
+    # 3. Получаем обновления, удаления и новые элементы
+    updated_result = await detect_updated_items(url)
+    deleted_result = await detect_deleted_items(url)
+    updated_items = updated_result["json"]
+    deleted_items = deleted_result["json"]
+    
+    # Добавляем новые элементы (diff)
+    new_items = [
+        {
+            "id": n["id"],
+            "parent_id": n.get("parent_id", ""),
+            "level": str(n.get("level", 0)),
+            "title": n.get("title", ""),
+            "body": n.get("body", ""),
+        }
+        for n in new_nodes if n["id"] not in task_map  # Только отсутствующие в Pyrus
+    ]
 
-    # 3. Получаем изменения из всех трёх эндпойнтов
-    updated_result = requests.post("https://aimatrix-e8zs.onrender.com/xmind-updated", data=payload, headers=headers).json()
-    deleted_result = requests.post("https://aimatrix-e8zs.onrender.com/xmind-delete", data=payload, headers=headers).json()
-    diff_result    = requests.post("https://aimatrix-e8zs.onrender.com/xmind-diff",    data=payload, headers=headers).json()
-
+    # 4. Обогащаем данные действиями
     enriched = []
-
-    # === UPDATED ===
-    for item in updated_result.get("json", []):
+    for item in updated_items:
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "update"
         enriched.append(item)
-
-    # === DELETED ===
-    for item in deleted_result.get("json", []):
+        
+    for item in deleted_items:
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "delete"
         enriched.append(item)
+        
+    for item in new_items:
+        item["task_id"] = None  # Для новых элементов task_id всегда пустой
+        item["action"] = "new"
+        enriched.append(item)
 
-    # === DIFF (новые) ===
-    for item in diff_result.get("json", []):
-        enriched.append({
-            "id": item.get("id", "").strip(),
-            "title": item.get("title", "").strip(),
-            "body": item.get("body", "").strip(),
-            "level": str(item.get("level", "")).strip(),
-            "parent_id": item.get("parent_id", "").strip(),
-            "task_id": None,
-            "action": "new"
-        })
-
-    # 4. Добавим CSV-таблицу всех элементов XMind (с task_id)
+    # 5. Формируем CSV-таблицу всех элементов XMind
+    xmind_df = extract_xmind_nodes(io.BytesIO(content))
     xmind_df["task_id"] = xmind_df["id"].map(task_map)
     csv_records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
 
