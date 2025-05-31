@@ -9,7 +9,6 @@ def find_new_nodes(flat_xmind, existing_ids):
 
         # Сравниваем с тем, что пришло из Pyrus
         if node_id not in existing_ids:
-            node["action"] = "new"  # 👈 добавляем тип
             new_nodes.append(node)
 
     return new_nodes
