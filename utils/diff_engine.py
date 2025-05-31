@@ -1,17 +1,45 @@
-def find_new_nodes(flat_xmind, existing_ids):
-    new_nodes = []
-    for node in flat_xmind:
-        node_id = node.get("id")
+def flatten_xmind_nodes(content_json: list, existing_ids: set = None):
+    existing_ids = existing_ids or set()
+    used_ids = set(existing_ids)
+    generated_nodes = []
 
-        # Пропускаем мусор (все должны иметь id после генерации)
-        if not node_id:
-            continue
+    def get_next_id(prefix):
+        index = 1
+        while True:
+            candidate = f"{prefix}.{str(index).zfill(2)}"
+            if candidate not in used_ids:
+                used_ids.add(candidate)
+                return candidate
+            index += 1
 
-        # Сравниваем с тем, что пришло из Pyrus
-        if node_id not in existing_ids:
-            new_nodes.append(node)
+    def walk(node, parent_id="", level=1):
+        label = node.get("labels", [])
+        node_id = label[0] if label else None
+        title = node.get("title", "")
+        body = node.get("notes", {}).get("plain", {}).get("content", "")
 
-    return new_nodes
+        is_generated = False
+        if node_id in used_ids or not node_id:
+            node_id = get_next_id(parent_id or "x")
+            is_generated = True
+        else:
+            used_ids.add(node_id)
+
+        current = {
+            "id": node_id,
+            "parent_id": parent_id,
+            "title": title,
+            "body": body,
+            "level": level,
+            "generated": is_generated,
+        }
+        generated_nodes.append(current)
+
+        for child in node.get("children", {}).get("attached", []):
+            walk(child, node_id, level + 1)
+
+    walk(content_json[0].get("rootTopic", {}))
+    return generated_nodes
 
 
 def format_as_markdown(items: list[dict]) -> str:
