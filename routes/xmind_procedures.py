@@ -10,24 +10,45 @@ router = APIRouter()
 # === DIFF ======================================================================
 @router.post("/xmind-diff")
 async def xmind_diff(url: str = Body(...)):
+    # 1. Загружаем XMind-файл по ссылке
     content = requests.get(url).content
     with zipfile.ZipFile(io.BytesIO(content)) as z:
         content_json = json.loads(z.read("content.json"))
 
-    # ВСЁ: внутри уже генерируются уникальные id с учётом Pyrus
+    # 2. Разворачиваем XMind-узлы
     flat_xmind = flatten_xmind_nodes(content_json)
 
-    # Выбираем только новосозданные
-    new_nodes = [
-        n for n in flat_xmind
-        if n.get("generated")
-    ]
+    # 3. Получаем Pyrus-данные
+    raw_data = get_data()
+
+    if isinstance(raw_data, str):
+        try:
+            raw_data = json.loads(raw_data)
+        except json.JSONDecodeError:
+            raw_data = [json.loads(line) for line in raw_data.splitlines() if line.strip()]
+
+    if isinstance(raw_data, dict):
+        for value in raw_data.values():
+            if isinstance(value, list):
+                raw_data = value
+                break
+
+    if not isinstance(raw_data, list):
+        raise ValueError(f"Pyrus data is not a list: got {type(raw_data)} instead")
+
+    # 4. Извлекаем ID из Pyrus
+    existing_ids = {
+        item["id"] for item in raw_data
+        if isinstance(item, dict) and "id" in item
+    }
+
+    # 5. Находим новые элементы
+    new_nodes = find_new_nodes(flat_xmind, existing_ids)
 
     return {
         "content": format_as_markdown(new_nodes),
         "json": new_nodes
     }
-
 
 # === SHARED PARSERS ============================================================
 def extract_xmind_nodes(file: io.BytesIO):
