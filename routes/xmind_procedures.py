@@ -138,14 +138,18 @@ async def detect_deleted_items(url: str = Body(...)):
     }
 
 # === MAPPING (Stage 1: только CSV из JSON) ====================================
+# Обновлённая версия `pyrus_mapping` с добавлением diff-результатов как new
+from fastapi import APIRouter, Body
+import zipfile, io, json, requests
+import pandas as pd
+from utils.data_loader import get_data
+from utils.diff_engine import format_as_markdown
+from utils.xmind_parser import flatten_xmind_nodes
+
+router = APIRouter()
+
 @router.post("/pyrus_mapping")
 async def pyrus_mapping(url: str = Body(...)):
-    import requests
-    import zipfile
-    import io
-    import json
-    import pandas as pd
-
     # 1. Скачиваем и парсим XMind
     try:
         content = requests.get(url).content
@@ -191,14 +195,21 @@ async def pyrus_mapping(url: str = Body(...)):
         if matrix_id:
             task_map[matrix_id] = task.get("id")
 
-    # 3. Получаем обновления и удаления
+    # 3. Получаем diff, обновления и удаления
+    from pyrus_procedures import xmind_diff, detect_updated_items, detect_deleted_items
+    diff_result = await xmind_diff(url)
     updated_result = await detect_updated_items(url)
     deleted_result = await detect_deleted_items(url)
 
+    diff_items = diff_result["json"]
     updated_items = updated_result["json"]
     deleted_items = deleted_result["json"]
 
     enriched = []
+    for item in diff_items:
+        item["task_id"] = ""
+        item["action"] = "new"
+        enriched.append(item)
     for item in updated_items:
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "update"
