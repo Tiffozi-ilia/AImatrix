@@ -23,8 +23,8 @@ def flatten_xmind_nodes(content_json: list, existing_ids: set = None):
         if not node_id or node_id in used_ids:
             node_id = get_next_id(parent_id or "x")
             is_generated = True
-        
-        used_ids.add(node_id)
+        else:
+            used_ids.add(node_id)
 
         current = {
             "id": node_id,
@@ -39,12 +39,15 @@ def flatten_xmind_nodes(content_json: list, existing_ids: set = None):
         for child in node.get("children", {}).get("attached", []):
             walk(child, node_id, level + 1)
 
+    # Проверка на пустые данные
+    if not content_json or not isinstance(content_json, list):
+        return generated_nodes
+        
     root_topic = content_json[0].get("rootTopic", {})
-    walk(root_topic)
+    if root_topic:
+        walk(root_topic)
+        
     return generated_nodes
-
-def find_new_nodes(flat_xmind, existing_ids):
-    return [n for n in flat_xmind if n["generated"]]
 
 # Остальной код без изменений...
 
