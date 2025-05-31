@@ -191,21 +191,32 @@ async def pyrus_mapping(url: str = Body(...)):
         if matrix_id:
             task_map[matrix_id] = task.get("id")
 
-    # 3. Получаем обновления и удаления
-    updated_result = await detect_updated_items(url)
-    deleted_result = await detect_deleted_items(url)
+    headers = {"Content-Type": "application/json"}
+    payload = json.dumps({"url": url})
 
-    updated_items = updated_result["json"]
-    deleted_items = deleted_result["json"]
+    # 3. Получаем изменения из всех трёх эндпойнтов
+    updated_result = requests.post("https://aimatrix-e8zs.onrender.com/xmind-updated", data=payload, headers=headers).json()
+    deleted_result = requests.post("https://aimatrix-e8zs.onrender.com/xmind-delete", data=payload, headers=headers).json()
+    diff_result    = requests.post("https://aimatrix-e8zs.onrender.com/xmind-diff",    data=payload, headers=headers).json()
 
     enriched = []
-    for item in updated_items:
+
+    # === UPDATED ===
+    for item in updated_result.get("json", []):
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "update"
         enriched.append(item)
-    for item in deleted_items:
+
+    # === DELETED ===
+    for item in deleted_result.get("json", []):
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "delete"
+        enriched.append(item)
+
+    # === DIFF (новые) ===
+    for item in diff_result.get("json", []):
+        item["task_id"] = None
+        item["action"] = "new"
         enriched.append(item)
 
     # 4. Добавим CSV-таблицу всех элементов XMind (с task_id)
