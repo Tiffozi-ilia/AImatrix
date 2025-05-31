@@ -61,25 +61,28 @@ async def xmind_diff(url: str = Body(...)):
     
     for node in flat_xmind:
         node_id = node.get("id")
-        parent_id = node.get("parent_id", "x")
+        parent_id = node.get("parent_id", "")
         node_id_str = str(node_id) if node_id else ""
         
         # Если узел уже существует в Pyrus - пропускаем
         if node_id_str in pyrus_ids:
             continue
             
+        # Определяем базовый префикс для генерации ID
+        base = str(parent_id) if parent_id else "x"  # Исправление здесь!
+        
         # Если ID отсутствует или конфликтует
         if not node_id_str or node_id_str in used_ids:
             # Инициализируем счетчик для родителя
-            if parent_id not in next_numbers:
-                next_numbers[parent_id] = 1
+            if base not in next_numbers:
+                next_numbers[base] = 1
             
             # Генерируем уникальный ID
             while True:
-                new_id = f"{parent_id}.{str(next_numbers[parent_id]).zfill(2)}"
+                new_id = f"{base}.{str(next_numbers[base]).zfill(2)}"
                 if new_id not in used_ids:
                     break
-                next_numbers[parent_id] += 1
+                next_numbers[base] += 1
                 
             node["id"] = new_id
             node["generated"] = True
