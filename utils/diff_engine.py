@@ -1,6 +1,27 @@
 # ====== utils/diff_engine.py ======
+from utils.data_loader import get_data
+
 def flatten_xmind_nodes(content_json: list, existing_ids: set = None):
-    existing_ids = existing_ids or set()
+    if existing_ids is None:
+        # Получаем список уже занятых id из Pyrus
+        raw = get_data()
+        try:
+            raw = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(raw, dict):
+                for value in raw.values():
+                    if isinstance(value, list):
+                        raw = value
+                        break
+            if not isinstance(raw, list):
+                raise ValueError("Pyrus data is not a list")
+        except Exception as e:
+            raise RuntimeError(f"Ошибка при загрузке данных Pyrus: {e}")
+
+        existing_ids = {
+            item["id"] for item in raw
+            if isinstance(item, dict) and "id" in item
+        }
+
     used_ids = set(existing_ids)
     generated_nodes = []
 
@@ -23,7 +44,7 @@ def flatten_xmind_nodes(content_json: list, existing_ids: set = None):
         if not node_id or node_id in used_ids:
             node_id = get_next_id(parent_id or "x")
             is_generated = True
-        
+
         used_ids.add(node_id)
 
         current = {
@@ -43,6 +64,7 @@ def flatten_xmind_nodes(content_json: list, existing_ids: set = None):
     root_topic = content_json[0].get("rootTopic", {})
     walk(root_topic)
     return generated_nodes
+
 
 
 def format_as_markdown(items: list[dict]) -> str:
