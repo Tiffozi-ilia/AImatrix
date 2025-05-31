@@ -89,6 +89,7 @@ async def xmind_diff(url: str = Body(...)):
         "content": format_as_markdown(new_nodes),
         "json": new_nodes
     }
+
 # === SHARED PARSERS ============================================================
 def extract_xmind_nodes(file: io.BytesIO):
     with zipfile.ZipFile(file) as z:
@@ -267,89 +268,4 @@ async def pyrus_mapping(url: str = Body(...)):
         "content": format_as_markdown(enriched),
         "json": enriched,
         "rows": csv_records
-    }
-
-# === APPLY CHANGES TO PYRUS ===================================================
-@router.post("/xmind_apply")
-async def xmind_apply(url: str = Body(...)):
-    from utils.data_loader import get_pyrus_token
-    import requests
-
-    # 1. Загружаем изменения
-    headers = {"Content-Type": "application/json"}
-    payload = json.dumps(url)
-
-    base = "https://aimatrix-e8zs.onrender.com"
-    endpoints = {
-        "new": f"{base}/xmind-diff",
-        "updated": f"{base}/xmind-updated",
-        "deleted": f"{base}/xmind-delete",
-        "mapping": f"{base}/pyrus_mapping"
-    }
-
-    print("=== Получаем изменения ===")
-    try:
-        diff_resp = requests.post(endpoints["new"], data=payload, headers=headers).json()
-        upd_resp = requests.post(endpoints["updated"], data=payload, headers=headers).json()
-        del_resp = requests.post(endpoints["deleted"], data=payload, headers=headers).json()
-    except Exception as e:
-        return {"error": f"Ошибка при получении изменений: {e}"}
-
-    diff_items = diff_resp.get("json", [])
-    upd_items = upd_resp.get("json", [])
-    del_items = del_resp.get("json", [])
-
-    # 2. Получаем token
-    token = get_pyrus_token()
-    headers_api = {"Authorization": f"Bearer {token}"}
-
-    # 3. Загрузка новых задач
-    created = []
-    for item in diff_items:
-        data = {
-            "form_id": 2309262,
-            "fields": [
-                {"id": 1, "value": item["id"]},
-                {"id": 2, "value": item["level"]},
-                {"id": 3, "value": item["title"]},
-                {"id": 4, "value": item["parent_id"]},
-                {"id": 5, "value": item["body"]},
-            ]
-        }
-        try:
-            r = requests.post("https://api.pyrus.com/v4/tasks", headers=headers_api, json=data)
-            created.append({"id": item["id"], "response": r.status_code})
-        except Exception as e:
-            created.append({"id": item["id"], "error": str(e)})
-
-    # 4. Обновление комментариями
-    updated = []
-    for item in upd_items:
-        task_id = item.get("task_id")
-        if not task_id:
-            continue
-        body = f"🔄 Обновление из XMind\nTitle: {item['title']}\nBody: {item['body']}"
-        try:
-            r = requests.post(f"https://api.pyrus.com/v4/tasks/{task_id}/comments",
-                              headers=headers_api, json={"text": body})
-            updated.append({"id": item["id"], "task_id": task_id, "response": r.status_code})
-        except Exception as e:
-            updated.append({"id": item["id"], "task_id": task_id, "error": str(e)})
-
-    # 5. Удаление задач
-    deleted = []
-    for item in del_items:
-        task_id = item.get("task_id")
-        if not task_id:
-            continue
-        try:
-            r = requests.delete(f"https://api.pyrus.com/v4/tasks/{task_id}", headers=headers_api)
-            deleted.append({"id": item["id"], "task_id": task_id, "response": r.status_code})
-        except Exception as e:
-            deleted.append({"id": item["id"], "task_id": task_id, "error": str(e)})
-
-    return {
-        "created": created,
-        "updated": updated,
-        "deleted": deleted
     }
