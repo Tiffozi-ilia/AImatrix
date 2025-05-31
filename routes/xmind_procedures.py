@@ -269,125 +269,66 @@ async def pyrus_mapping(url: str = Body(...)):
         "rows": csv_records
     }
 
-# === APPLY CHANGES TO PYRUS ===================================================
-@router.post("/xmind_apply")
-async def xmind_apply(url: str = Body(...)):
-    from utils.data_loader import get_pyrus_token
-
-    # 1. Загружаем XMind 1 раз
-    try:
-        content = requests.get(url).content
-        with zipfile.ZipFile(io.BytesIO(content)) as z:
-            content_json = json.loads(z.read("content.json"))
-    except Exception as e:
-        return {"error": f"Ошибка при загрузке XMind: {e}"}
-
-    # 2. Парсим
-    flat_xmind = flatten_xmind_nodes(content_json)
-
-    # 3. Получаем данные Pyrus
-    raw_data = get_data()
-    raw_data = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
-    pyrus_df = extract_pyrus_data()
-
-    # 4. Определим diff/updated/deleted локально
-    # --- UPDATED
-    xmind_df = pd.DataFrame(flat_xmind)
-    merged = pd.merge(xmind_df, pyrus_df, on="id", suffixes=("_xmind", "_pyrus"))
-    updated_items = merged[(merged["title_xmind"] != merged["title_pyrus"]) |
-                           (merged["body_xmind"] != merged["body_pyrus"])]
-    updated_records = updated_items.rename(columns={
-        "title_xmind": "title",
-        "body_xmind": "body",
-        "parent_id_xmind": "parent_id",
-        "level_xmind": "level"
-    })[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
-
-    # --- DELETED
-    deleted_df = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])]
-    deleted_records = deleted_df[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
-
-    # --- DIFF
-    pyrus_ids = {row["id"] for _, row in pyrus_df.iterrows()}
-    used_ids = set(pyrus_ids)
-    max_numbers = {}
-    for item_id in used_ids:
-        if "." in item_id:
-            *base, num = item_id.split(".")
-            base_str = ".".join(base)
-            max_numbers[base_str] = max(max_numbers.get(base_str, 0), int(num))
-
-    new_items = []
-    for node in flat_xmind:
-        node_id = node.get("id")
-        parent_id = node.get("parent_id", "")
-        if not node_id or node_id in used_ids:
-            base = parent_id or "x"
-            max_num = max_numbers.get(base, 0) + 1
-            new_id = f"{base}.{str(max_num).zfill(2)}"
-            node["id"] = new_id
-            max_numbers[base] = max_num
-            used_ids.add(new_id)
-            node["generated"] = True
-            new_items.append(node)
-
-    # 5. Получаем token
+# ------------ /apply_create ------------
+@router.post("/apply_create")
+async def apply_create(url: str = Body(...)):
     token = get_pyrus_token()
     headers_api = {"Authorization": f"Bearer {token}"}
 
-    # 6. Создаём задачи
-    created = []
+    r = requests.post(f"{BASE_URL}/pyrus_mapping", json={"url": url})
+    actions = r.json().get("json", [])
+    new_items = [a for a in actions if a["action"] == "new"]
+
+    result = []
     for item in new_items:
-        data = {
-            "form_id": 2309262,
-            "fields": [
-                {"id": 1, "value": item["id"]},
-                {"id": 2, "value": item.get("level", "")},
-                {"id": 3, "value": item.get("title", "")},
-                {"id": 4, "value": item.get("parent_id", "")},
-                {"id": 5, "value": item.get("body", "")},
-            ]
-        }
-        try:
-            r = requests.post("https://api.pyrus.com/v4/tasks", headers=headers_api, json=data)
-            created.append({"id": item["id"], "response": r.status_code})
-        except Exception as e:
-            created.append({"id": item["id"], "error": str(e)})
+        fields = [
+            {"id": 1, "value": item["id"]},
+            {"id": 2, "value": item["level"]},
+            {"id": 3, "value": item["title"]},
+            {"id": 4, "value": item["parent_id"]},
+            {"id": 5, "value": item["body"]}
+        ]
+        resp = requests.post(f"{PYRUS_API}/tasks", headers=headers_api, json={"form_id": FORM_ID, "fields": fields})
+        result.append({"id": item["id"], "status": resp.status_code, "response": resp.json() if resp.ok else resp.text})
+    return {"created": result}
 
-    # 7. Обновляем
-    task_map = {}
-    for task in raw_data.get("tasks", []):
-        fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
-        mid = fields.get("matrix_id", "").strip()
-        task_map[mid] = task.get("id")
+# ------------ /apply_update ------------
+@router.post("/apply_update")
+async def apply_update(url: str = Body(...)):
+    token = get_pyrus_token()
+    headers_api = {"Authorization": f"Bearer {token}"}
 
-    updated = []
-    for item in updated_records:
-        task_id = task_map.get(item["id"])
+    r = requests.post(f"{BASE_URL}/pyrus_mapping", json={"url": url})
+    actions = r.json().get("json", [])
+    updated_items = [a for a in actions if a["action"] == "update"]
+
+    result = []
+    for item in updated_items:
+        task_id = item.get("task_id")
         if not task_id:
+            result.append({"id": item["id"], "error": "no task_id"})
             continue
         body = f"🔄 Обновление из XMind\nTitle: {item['title']}\nBody: {item['body']}"
-        try:
-            r = requests.post(f"https://api.pyrus.com/v4/tasks/{task_id}/comments",
-                              headers=headers_api, json={"text": body})
-            updated.append({"id": item["id"], "task_id": task_id, "response": r.status_code})
-        except Exception as e:
-            updated.append({"id": item["id"], "task_id": task_id, "error": str(e)})
+        resp = requests.post(f"{PYRUS_API}/tasks/{task_id}/comments", headers=headers_api, json={"text": body})
+        result.append({"id": item["id"], "task_id": task_id, "status": resp.status_code, "response": resp.json() if resp.ok else resp.text})
+    return {"updated": result}
 
-    # 8. Удаляем
-    deleted = []
-    for item in deleted_records:
-        task_id = task_map.get(item["id"])
+# ------------ /apply_delete ------------
+@router.post("/apply_delete")
+async def apply_delete(url: str = Body(...)):
+    token = get_pyrus_token()
+    headers_api = {"Authorization": f"Bearer {token}"}
+
+    r = requests.post(f"{BASE_URL}/pyrus_mapping", json={"url": url})
+    actions = r.json().get("json", [])
+    deleted_items = [a for a in actions if a["action"] == "delete"]
+
+    result = []
+    for item in deleted_items:
+        task_id = item.get("task_id")
         if not task_id:
+            result.append({"id": item["id"], "error": "no task_id"})
             continue
-        try:
-            r = requests.delete(f"https://api.pyrus.com/v4/tasks/{task_id}", headers=headers_api)
-            deleted.append({"id": item["id"], "task_id": task_id, "response": r.status_code})
-        except Exception as e:
-            deleted.append({"id": item["id"], "task_id": task_id, "error": str(e)})
-
-    return {
-        "created": created,
-        "updated": updated,
-        "deleted": deleted
-    }
+        resp = requests.delete(f"{PYRUS_API}/tasks/{task_id}", headers=headers_api)
+        result.append({"id": item["id"], "task_id": task_id, "status": resp.status_code, "response": resp.text})
+    return {"deleted": result}
