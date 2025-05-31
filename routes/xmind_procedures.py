@@ -8,24 +8,14 @@ from utils.xmind_parser import flatten_xmind_nodes
 router = APIRouter()
 
 # === DIFF ======================================================================
-# === DIFF ======================================================================
 @router.post("/xmind-diff")
 async def xmind_diff(url: str = Body(...)):
-    import requests
-    import zipfile
-    import io
-    import json
-    from utils.data_loader import get_data
-    from utils.diff_engine import format_as_markdown
-    from utils.xmind_parser import flatten_xmind_nodes
-
-    # 1. Загружаем XMind и разворачиваем
     content = requests.get(url).content
     with zipfile.ZipFile(io.BytesIO(content)) as z:
         content_json = json.loads(z.read("content.json"))
+
     flat_xmind = flatten_xmind_nodes(content_json)
 
-    # 2. Загружаем данные из Pyrus
     raw_data = get_data()
     if isinstance(raw_data, str):
         try:
@@ -40,69 +30,83 @@ async def xmind_diff(url: str = Body(...)):
     if not isinstance(raw_data, list):
         raise ValueError("Pyrus data is not a list")
 
-    # 3. Собираем все существующие ID из Pyrus
+    # Собираем все существующие ID из Pyrus как строки
     pyrus_ids = {
-        str(item.get("id", "")).strip() for item in raw_data
+        str(item["id"]) for item in raw_data
         if isinstance(item, dict) and "id" in item
     }
 
-    # 4. Строим карту максимальных номеров по каждому base-id
+    # Создаем словарь для отслеживания максимальных номеров для каждого родителя
     max_numbers = {}
     all_existing_ids = set(pyrus_ids)
-
+    
+    # Анализируем существующие ID, чтобы найти максимальные номера
     for item_id in all_existing_ids:
-        item_id = str(item_id).strip()
-        parts = item_id.split(".")
-        if len(parts) < 2:
-            continue
-        base = ".".join(parts[:-1])
-        number_part = parts[-1]
-        if number_part.isdigit():
-            number = int(number_part)
-            if base not in max_numbers or number > max_numbers[base]:
-                max_numbers[base] = number
-
+        # Проверяем, что ID содержит точку и имеет числовую часть
+        if isinstance(item_id, str) and '.' in item_id:
+            parts = item_id.split('.')
+            # Проверяем, что последняя часть - число
+            if parts[-1].isdigit():
+                base = '.'.join(parts[:-1])
+                number = int(parts[-1])
+                if base not in max_numbers or number > max_numbers[base]:
+                    max_numbers[base] = number
+    
+    # Анализируем ID из XMind, чтобы обновить максимальные номера
     for node in flat_xmind:
-        node_id = str(node.get("id", "")).strip()
-        parts = node_id.split(".")
-        if len(parts) < 2:
-            continue
-        base = ".".join(parts[:-1])
-        number_part = parts[-1]
-        if number_part.isdigit():
-            number = int(number_part)
-            if base not in max_numbers or number > max_numbers[base]:
-                max_numbers[base] = number
-
-    # 5. Генерация новых ID и сбор новых узлов
+        node_id = node.get("id")
+        if node_id:
+            # Приводим ID к строке для единообразия
+            node_id_str = str(node_id)
+            if '.' in node_id_str:
+                parts = node_id_str.split('.')
+                if parts[-1].isdigit():
+                    base = '.'.join(parts[:-1])
+                    number = int(parts[-1])
+                    if base not in max_numbers or number > max_numbers[base]:
+                        max_numbers[base] = number
+    
     used_ids = set(all_existing_ids)
     new_nodes = []
-
+    
     for node in flat_xmind:
-        node_id = str(node.get("id", "")).strip()
-        parent_id = str(node.get("parent_id", "")).strip()
-
-        if not node_id or node_id in used_ids:
-            base = parent_id if parent_id else "x"
+        node_id = node.get("id")
+        parent_id = node.get("parent_id", "")
+        
+        # Приводим ID к строке
+        node_id_str = str(node_id) if node_id else ""
+        
+        # Если ID отсутствует или конфликтует
+        if not node_id_str or node_id_str in used_ids:
+            # Определяем базовый префикс
+            base = str(parent_id) if parent_id else "x"
+            
+            # Получаем текущий максимальный номер для этого базового префикса
             current_max = max_numbers.get(base, 0)
             new_number = current_max + 1
+            
+            # Генерируем новый ID
             new_id = f"{base}.{str(new_number).zfill(2)}"
+            
+            # Обновляем данные узла
             node["id"] = new_id
             node["generated"] = True
+            
+            # Обновляем максимальный номер для этого базового префикса
             max_numbers[base] = new_number
             used_ids.add(new_id)
+        else:
+            # Если ID валиден, сохраняем его как использованный
+            used_ids.add(node_id_str)
+        
+        # Добавляем в new_nodes если это новый узел
+        if node.get("generated") and node["id"] not in pyrus_ids:
             new_nodes.append(node)
-        elif node_id not in pyrus_ids:
-            # ID уникален, но ещё не существует в Pyrus
-            node["generated"] = False
-            new_nodes.append(node)
-            used_ids.add(node_id)
 
     return {
         "content": format_as_markdown(new_nodes),
         "json": new_nodes
     }
-
 # === SHARED PARSERS ============================================================
 def extract_xmind_nodes(file: io.BytesIO):
     with zipfile.ZipFile(file) as z:
