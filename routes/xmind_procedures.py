@@ -71,7 +71,7 @@ async def xmind_diff(url: str = Body(...)):
     return {
         "content": format_as_markdown(new_nodes),
         "json": new_nodes
-
+    }
 # === SHARED PARSERS ============================================================
 def extract_xmind_nodes(file: io.BytesIO):
     with zipfile.ZipFile(file) as z:
