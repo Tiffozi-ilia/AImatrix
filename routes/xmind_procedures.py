@@ -269,66 +269,157 @@ async def pyrus_mapping(url: str = Body(...)):
         "rows": csv_records
     }
 
-# ------------ /apply_create ------------
-@router.post("/apply_create")
-async def apply_create(url: str = Body(...)):
+# === APPLY CHANGES TO PYRUS ===================================================
+import httpx  # Заменим requests на асинхронный httpx
+import asyncio
+
+@router.post("/xmind_apply")
+async def xmind_apply(url: str = Body(...)):
+    from utils.data_loader import get_pyrus_token
+
+    # 1. Загружаем XMind с таймаутом
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            content = response.content
+        with zipfile.ZipFile(io.BytesIO(content)) as z:
+            content_json = json.loads(z.read("content.json"))
+    except Exception as e:
+        return {"error": f"Ошибка при загрузке XMind: {e}"}
+
+    # 2. Парсим данные
+    flat_xmind = flatten_xmind_nodes(content_json)
+    
+    # 3. Получаем данные Pyrus
+    try:
+        raw_data = get_data()
+        raw_data = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+        pyrus_df = extract_pyrus_data()
+    except Exception as e:
+        return {"error": f"Ошибка при загрузке данных Pyrus: {e}"}
+
+    # 4. Определяем изменения (оптимизированная версия)
+    # --- Создаем DataFrame из XMind
+    xmind_df = pd.DataFrame(flat_xmind)
+    
+    # --- Список всех ID в Pyrus
+    pyrus_ids = set(pyrus_df["id"].unique())
+    
+    # --- UPDATED: находим изменения в title/body
+    updated_mask = (
+        (xmind_df["title"] != pyrus_df.set_index("id")["title"]) |
+        (xmind_df["body"] != pyrus_df.set_index("id")["body"])
+    )
+    updated_records = xmind_df[updated_mask].to_dict(orient="records")
+    
+    # --- DELETED: отсутствующие в XMind
+    deleted_records = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])].to_dict(orient="records")
+    
+    # --- NEW: генерируем ID для новых элементов
+    new_items = []
+    for node in flat_xmind:
+        if not node.get("id") or node["id"] not in pyrus_ids:
+            parent_id = node.get("parent_id", "x")
+            base = parent_id if parent_id else "x"
+            
+            # Генерация нового ID
+            if base not in max_numbers:
+                # Находим максимальный номер для этого префикса
+                prefix_ids = [id for id in pyrus_ids if id.startswith(f"{base}.")]
+                if prefix_ids:
+                    max_num = max(int(id.split(".")[-1]) for id in prefix_ids)
+                else:
+                    max_num = 0
+                max_numbers[base] = max_num
+            
+            max_numbers[base] += 1
+            new_id = f"{base}.{str(max_numbers[base]).zfill(2)}"
+            node["id"] = new_id
+            node["generated"] = True
+            new_items.append(node)
+
+    # 5. Получаем token
     token = get_pyrus_token()
     headers_api = {"Authorization": f"Bearer {token}"}
-
-    r = requests.post(f"{BASE_URL}/pyrus_mapping", json={"url": url})
-    actions = r.json().get("json", [])
-    new_items = [a for a in actions if a["action"] == "new"]
-
-    result = []
-    for item in new_items:
-        fields = [
-            {"id": 1, "value": item["id"]},
-            {"id": 2, "value": item["level"]},
-            {"id": 3, "value": item["title"]},
-            {"id": 4, "value": item["parent_id"]},
-            {"id": 5, "value": item["body"]}
+    
+    # 6. Создаем асинхронные задачи
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # Создаем новые задачи
+        created_tasks = [
+            client.post(
+                "https://api.pyrus.com/v4/tasks",
+                headers=headers_api,
+                json={
+                    "form_id": 2309262,
+                    "fields": [
+                        {"id": 1, "value": item["id"]},
+                        {"id": 2, "value": item.get("level", "")},
+                        {"id": 3, "value": item.get("title", "")},
+                        {"id": 4, "value": item.get("parent_id", "")},
+                        {"id": 5, "value": item.get("body", "")},
+                    ]
+                }
+            )
+            for item in new_items
         ]
-        resp = requests.post(f"{PYRUS_API}/tasks", headers=headers_api, json={"form_id": FORM_ID, "fields": fields})
-        result.append({"id": item["id"], "status": resp.status_code, "response": resp.json() if resp.ok else resp.text})
-    return {"created": result}
+        
+        # Обновляем задачи (комментарии)
+        updated_tasks = []
+        for item in updated_records:
+            task_id = task_map.get(item["id"])
+            if task_id:
+                updated_tasks.append(
+                    client.post(
+                        f"https://api.pyrus.com/v4/tasks/{task_id}/comments",
+                        headers=headers_api,
+                        json={"text": f"🔄 Обновление из XMind\nTitle: {item['title']}\nBody: {item['body']}"}
+                    )
+                )
+        
+        # Удаляем задачи
+        deleted_tasks = []
+        for item in deleted_records:
+            task_id = task_map.get(item["id"])
+            if task_id:
+                deleted_tasks.append(
+                    client.delete(f"https://api.pyrus.com/v4/tasks/{task_id}", headers=headers_api)
+                )
+        
+        # Выполняем все операции параллельно
+        created_responses = await asyncio.gather(*created_tasks, return_exceptions=True)
+        updated_responses = await asyncio.gather(*updated_tasks, return_exceptions=True)
+        deleted_responses = await asyncio.gather(*deleted_tasks, return_exceptions=True)
+    
+    # 7. Обрабатываем результаты
+    created = []
+    for i, response in enumerate(created_responses):
+        item_id = new_items[i]["id"]
+        if isinstance(response, Exception):
+            created.append({"id": item_id, "error": str(response)})
+        else:
+            created.append({"id": item_id, "response": response.status_code})
+    
+    updated = []
+    for i, response in enumerate(updated_responses):
+        item_id = updated_records[i]["id"]
+        task_id = task_map.get(item_id)
+        if isinstance(response, Exception):
+            updated.append({"id": item_id, "task_id": task_id, "error": str(response)})
+        else:
+            updated.append({"id": item_id, "task_id": task_id, "response": response.status_code})
+    
+    deleted = []
+    for i, response in enumerate(deleted_responses):
+        item_id = deleted_records[i]["id"]
+        task_id = task_map.get(item_id)
+        if isinstance(response, Exception):
+            deleted.append({"id": item_id, "task_id": task_id, "error": str(response)})
+        else:
+            deleted.append({"id": item_id, "task_id": task_id, "response": response.status_code})
 
-# ------------ /apply_update ------------
-@router.post("/apply_update")
-async def apply_update(url: str = Body(...)):
-    token = get_pyrus_token()
-    headers_api = {"Authorization": f"Bearer {token}"}
-
-    r = requests.post(f"{BASE_URL}/pyrus_mapping", json={"url": url})
-    actions = r.json().get("json", [])
-    updated_items = [a for a in actions if a["action"] == "update"]
-
-    result = []
-    for item in updated_items:
-        task_id = item.get("task_id")
-        if not task_id:
-            result.append({"id": item["id"], "error": "no task_id"})
-            continue
-        body = f"🔄 Обновление из XMind\nTitle: {item['title']}\nBody: {item['body']}"
-        resp = requests.post(f"{PYRUS_API}/tasks/{task_id}/comments", headers=headers_api, json={"text": body})
-        result.append({"id": item["id"], "task_id": task_id, "status": resp.status_code, "response": resp.json() if resp.ok else resp.text})
-    return {"updated": result}
-
-# ------------ /apply_delete ------------
-@router.post("/apply_delete")
-async def apply_delete(url: str = Body(...)):
-    token = get_pyrus_token()
-    headers_api = {"Authorization": f"Bearer {token}"}
-
-    r = requests.post(f"{BASE_URL}/pyrus_mapping", json={"url": url})
-    actions = r.json().get("json", [])
-    deleted_items = [a for a in actions if a["action"] == "delete"]
-
-    result = []
-    for item in deleted_items:
-        task_id = item.get("task_id")
-        if not task_id:
-            result.append({"id": item["id"], "error": "no task_id"})
-            continue
-        resp = requests.delete(f"{PYRUS_API}/tasks/{task_id}", headers=headers_api)
-        result.append({"id": item["id"], "task_id": task_id, "status": resp.status_code, "response": resp.text})
-    return {"deleted": result}
+    return {
+        "created": created,
+        "updated": updated,
+        "deleted": deleted
+    }
