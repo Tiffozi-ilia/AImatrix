@@ -256,7 +256,7 @@ async def pyrus_mapping(url: str = Body(...)):
             "title": n.get("title", ""),
             "body": n.get("body", ""),
         }
-        for n in new_nodes if n["id"] not in task_map  # Только отсутствующие в Pyrus
+        for n in new_nodes 
     ]
 
     # 4. Обогащаем данные действиями
