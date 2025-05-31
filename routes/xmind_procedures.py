@@ -14,31 +14,25 @@ async def xmind_diff(url: str = Body(...)):
     with zipfile.ZipFile(io.BytesIO(content)) as z:
         content_json = json.loads(z.read("content.json"))
 
-    flat_xmind = flatten_xmind_nodes(content_json)
-
+    # Получаем существующие ID из Pyrus
     raw_data = get_data()
     if isinstance(raw_data, str):
         try:
             raw_data = json.loads(raw_data)
         except json.JSONDecodeError:
             raw_data = [json.loads(line) for line in raw_data.splitlines() if line.strip()]
+    
     if isinstance(raw_data, dict):
-        for value in raw_data.values():
-            if isinstance(value, list):
-                raw_data = value
-                break
-    if not isinstance(raw_data, list):
-        raise ValueError("Pyrus data is not a list")
-
+        raw_data = raw_data.get("tasks", [])
+    
     pyrus_ids = {
         item["id"] for item in raw_data
         if isinstance(item, dict) and "id" in item
     }
 
-    new_nodes = [
-        n for n in flat_xmind
-        if n.get("generated") and n["id"] not in pyrus_ids
-    ]
+    # Передаем existing_ids в flatten_xmind_nodes
+    flat_xmind = flatten_xmind_nodes(content_json, existing_ids=pyrus_ids)
+    new_nodes = find_new_nodes(flat_xmind, pyrus_ids)
 
     return {
         "content": format_as_markdown(new_nodes),
