@@ -16,6 +16,9 @@ async def xmind_diff(url: str = Body(...)):
 
     flat_xmind = flatten_xmind_nodes(content_json)
 
+    # ⬇️ Сортировка по уровню и порядку следования
+    flat_xmind.sort(key=lambda n: (int(n.get("level", 0)), int(n.get("order", 0))))
+
     raw_data = get_data()
     if isinstance(raw_data, str):
         try:
@@ -35,54 +38,52 @@ async def xmind_diff(url: str = Body(...)):
         if isinstance(item, dict) and "id" in item
     }
 
-    # 1. Соберем все существующие ID в системе
-    all_ids = set(pyrus_ids)
-    for node in flat_xmind:
-        if node_id := node.get("id"):
-            all_ids.add(str(node_id))
+    max_numbers = {}
+    all_existing_ids = set(pyrus_ids)
 
-    # 2. Создадим словарь для следующего номера каждого родителя
-    next_numbers = {}
-    for item_id in all_ids:
-        if '.' in item_id:
-            parts = item_id.rsplit('.', 1)
+    for item_id in all_existing_ids:
+        if isinstance(item_id, str) and '.' in item_id:
+            parts = item_id.split('.')
             if parts[-1].isdigit():
-                base = parts[0]
+                base = '.'.join(parts[:-1])
                 number = int(parts[-1])
-                if base not in next_numbers or number > next_numbers.get(base, 0):
-                    next_numbers[base] = number
+                if base not in max_numbers or number > max_numbers[base]:
+                    max_numbers[base] = number
 
-    # 3. Только для новых узлов (отсутствующих в Pyrus)
-    new_nodes = []
     for node in flat_xmind:
         node_id = node.get("id")
-        parent_id = node.get("parent_id", "") or "x"
-        
-        # Пропускаем существующие узлы
-        if node_id and str(node_id) in pyrus_ids:
-            continue
-            
-        # Для новых узлов без ID или с конфликтующим ID
-        if not node_id or str(node_id) in all_ids:
-            # Определяем базовый префикс
-            base = str(parent_id)
-            
-            # Инициализируем счетчик
-            if base not in next_numbers:
-                next_numbers[base] = 0
-                
-            # Генерируем уникальный ID
-            next_numbers[base] += 1
-            new_id = f"{base}.{str(next_numbers[base]).zfill(2)}"
-            
-            # Обновляем узел
+        if node_id:
+            node_id_str = str(node_id)
+            if '.' in node_id_str:
+                parts = node_id_str.split('.')
+                if parts[-1].isdigit():
+                    base = '.'.join(parts[:-1])
+                    number = int(parts[-1])
+                    if base not in max_numbers or number > max_numbers[base]:
+                        max_numbers[base] = number
+
+    used_ids = set(all_existing_ids)
+    new_nodes = []
+
+    for node in flat_xmind:
+        node_id = node.get("id")
+        parent_id = node.get("parent_id", "")
+        node_id_str = str(node_id) if node_id else ""
+
+        if not node_id_str or node_id_str in used_ids:
+            base = str(parent_id) if parent_id else "x"
+            current_max = max_numbers.get(base, 0)
+            new_number = current_max + 1
+            new_id = f"{base}.{str(new_number).zfill(2)}"
             node["id"] = new_id
             node["generated"] = True
-            all_ids.add(new_id)
+            max_numbers[base] = new_number
+            used_ids.add(new_id)
         else:
-            node["generated"] = False
-            
-        new_nodes.append(node)
+            used_ids.add(node_id_str)
+
+        if node.get("generated") and node["id"] not in pyrus_ids:
+            new_nodes.append(node)
 
     return {
         "content": format_as_markdown(new_nodes),
