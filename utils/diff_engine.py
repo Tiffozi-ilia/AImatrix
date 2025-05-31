@@ -17,10 +17,12 @@ def flatten_xmind_nodes(content_json: list, existing_ids: set = None):
         except Exception as e:
             raise RuntimeError(f"Ошибка при загрузке данных Pyrus: {e}")
 
-        existing_ids = {
-            item["id"] for item in raw
-            if isinstance(item, dict) and "id" in item
-        }
+        existing_ids = set()
+        for task in raw:
+            fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
+            matrix_id = fields.get("matrix_id", "").strip()
+            if matrix_id:
+                existing_ids.add(matrix_id)
 
     used_ids = set(existing_ids)
     generated_nodes = []
