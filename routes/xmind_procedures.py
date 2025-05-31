@@ -80,7 +80,7 @@ async def xmind_diff(url: str = Body(...)):
             node["generated"] = True
             all_ids.add(new_id)
         else:
-            node["generated"] = True
+            node["generated"] = False
             
         new_nodes.append(node)
 
