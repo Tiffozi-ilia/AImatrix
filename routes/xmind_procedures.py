@@ -8,19 +8,14 @@ from utils.xmind_parser import flatten_xmind_nodes
 router = APIRouter()
 
 # === DIFF ======================================================================
-# === DIFF ======================================================================
 @router.post("/xmind-diff")
 async def xmind_diff(url: str = Body(...)):
     content = requests.get(url).content
     with zipfile.ZipFile(io.BytesIO(content)) as z:
         content_json = json.loads(z.read("content.json"))
 
-    # Получаем плоский список с сохранением порядка
     flat_xmind = flatten_xmind_nodes(content_json)
-    
-    # Сохраняем исходный порядок элементов
-    node_order = {node['id']: idx for idx, node in enumerate(flat_xmind) if node.get('id')}
-    
+
     raw_data = get_data()
     if isinstance(raw_data, str):
         try:
@@ -40,81 +35,55 @@ async def xmind_diff(url: str = Body(...)):
         if isinstance(item, dict) and "id" in item
     }
 
-    # Создаем словарь для отслеживания следующего номера для каждого родителя
-    next_numbers = {}
-    # Собираем все существующие ID для проверки уникальности
+    # 1. Соберем все существующие ID в системе
     all_ids = set(pyrus_ids)
-    
-    # Первый проход: собираем информацию о существующих номерах
     for node in flat_xmind:
-        node_id = node.get("id")
-        if node_id and node_id in all_ids:
-            # Если ID уже существует, пропускаем для первого прохода
-            continue
-            
-        parent_id = node.get("parent_id", "") or "x"
-        if node_id and '.' in node_id:
-            parts = node_id.split('.')
-            if parts[-1].isdigit():
-                base = '.'.join(parts[:-1])
-                number = int(parts[-1])
-                if base not in next_numbers or number > next_numbers[base]:
-                    next_numbers[base] = number
-        elif node_id:
-            all_ids.add(node_id)
+        if node_id := node.get("id"):
+            all_ids.add(str(node_id))
 
-    # Второй проход: генерация ID в порядке расположения элементов
+    # 2. Создадим словарь для следующего номера каждого родителя
+    next_numbers = {}
+    for item_id in all_ids:
+        if '.' in item_id:
+            parts = item_id.rsplit('.', 1)
+            if parts[-1].isdigit():
+                base = parts[0]
+                number = int(parts[-1])
+                if base not in next_numbers or number > next_numbers.get(base, 0):
+                    next_numbers[base] = number
+
+    # 3. Только для новых узлов (отсутствующих в Pyrus)
     new_nodes = []
-    
     for node in flat_xmind:
         node_id = node.get("id")
         parent_id = node.get("parent_id", "") or "x"
         
-        # Пропускаем элементы, которые уже существуют в Pyrus
-        if node_id and node_id in pyrus_ids:
+        # Пропускаем существующие узлы
+        if node_id and str(node_id) in pyrus_ids:
             continue
             
-        needs_new_id = False
-        
-        # Если ID отсутствует или конфликтует
-        if not node_id or node_id in all_ids:
-            needs_new_id = True
-        else:
-            # Проверяем, соответствует ли ID ожидаемой структуре
-            if '.' in node_id:
-                parts = node_id.split('.')
-                if not parts[-1].isdigit():
-                    needs_new_id = True
-            else:
-                needs_new_id = True
+        # Для новых узлов без ID или с конфликтующим ID
+        if not node_id or str(node_id) in all_ids:
+            # Определяем базовый префикс
+            base = str(parent_id)
+            
+            # Инициализируем счетчик
+            if base not in next_numbers:
+                next_numbers[base] = 0
                 
-        if needs_new_id:
-            # Инициализируем счетчик для родителя
-            if parent_id not in next_numbers:
-                next_numbers[parent_id] = 0
-                
-            # Находим следующий доступный номер
-            while True:
-                next_numbers[parent_id] += 1
-                new_id = f"{parent_id}.{str(next_numbers[parent_id]).zfill(2)}"
-                if new_id not in all_ids:
-                    break
-                    
-            node_id = new_id
+            # Генерируем уникальный ID
+            next_numbers[base] += 1
+            new_id = f"{base}.{str(next_numbers[base]).zfill(2)}"
+            
+            # Обновляем узел
             node["id"] = new_id
             node["generated"] = True
+            all_ids.add(new_id)
         else:
-            node["generated"] = False
+            node["generated"] = True
             
-        all_ids.add(node_id)
-        
-        # Добавляем в new_nodes если это новый узел
-        if node.get("generated") and node["id"] not in pyrus_ids:
-            new_nodes.append(node)
-    
-    # Восстанавливаем исходный порядок элементов
-    new_nodes.sort(key=lambda node: node_order.get(node['id'], float('inf')))
-    
+        new_nodes.append(node)
+
     return {
         "content": format_as_markdown(new_nodes),
         "json": new_nodes
