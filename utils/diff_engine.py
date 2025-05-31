@@ -18,7 +18,7 @@ def flatten_xmind_nodes(content_json: list, existing_ids: set = None):
         except Exception as e:
             raise RuntimeError(f"Ошибка при загрузке данных Pyrus: {e}")
 
-        # ✅ СЮДА ВСТАВЛЕНО ПРАВИЛЬНОЕ ПОЛУЧЕНИЕ matrix_id
+        # Собираем все уже занятые matrix_id
         existing_ids = set()
         for task in raw:
             fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
@@ -40,7 +40,7 @@ def flatten_xmind_nodes(content_json: list, existing_ids: set = None):
 
     def walk(node, parent_id="", level=1):
         label = node.get("labels", [])
-        node_id = label[0] if label else None
+        node_id = label[0].strip() if label else None
         title = node.get("title", "")
         body = node.get("notes", {}).get("plain", {}).get("content", "")
 
@@ -48,11 +48,11 @@ def flatten_xmind_nodes(content_json: list, existing_ids: set = None):
         if not node_id or node_id in used_ids:
             node_id = get_next_id(parent_id or "x")
             is_generated = True
-
-        used_ids.add(node_id)
+        else:
+            used_ids.add(node_id)
 
         current = {
-            "id": node_id.strip(),
+            "id": node_id,
             "title": title.strip(),
             "body": body.strip(),
             "level": str(level),
@@ -73,17 +73,17 @@ def flatten_xmind_nodes(content_json: list, existing_ids: set = None):
 def format_as_markdown(items: list[dict]) -> str:
     if not items:
         return "⚠️ Нет данных"
-
+    
     headers = set()
     for item in items:
         headers.update(item.keys())
     headers = list(headers)
-
+    
     table = ["| " + " | ".join(headers) + " |",
              "| " + " | ".join(["---"] * len(headers)) + " |"]
-
+    
     for item in items:
         row = [str(item.get(h, "")).replace("\n", "<br>") for h in headers]
         table.append("| " + " | ".join(row) + " |")
-
+    
     return "\n".join(table)
