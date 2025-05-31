@@ -150,7 +150,7 @@ router = APIRouter()
 
 @router.post("/pyrus_mapping")
 async def pyrus_mapping(url: str = Body(...)):
-    # 1. Скачиваем и парсим XMind
+    # === 1. Скачиваем и парсим XMind ===
     try:
         content = requests.get(url).content
         with zipfile.ZipFile(io.BytesIO(content)) as z:
@@ -177,8 +177,9 @@ async def pyrus_mapping(url: str = Body(...)):
         return rows
 
     xmind_df = pd.DataFrame(walk(content_json[0].get("rootTopic", {})))
+    xmind_ids = set(xmind_df["id"])
 
-    # 2. Загружаем данные из Pyrus
+    # === 2. Загружаем данные из Pyrus ===
     try:
         raw = get_data()
         if isinstance(raw, str):
@@ -188,43 +189,55 @@ async def pyrus_mapping(url: str = Body(...)):
     except Exception as e:
         return {"error": f"Не удалось загрузить JSON из Pyrus: {e}"}
 
+    pyrus_records = []
     task_map = {}
+
     for task in raw:
-        fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
+        fields = {f["name"]: f.get("value", "") for f in task.get("fields", [])}
         matrix_id = fields.get("matrix_id", "").strip()
         if matrix_id:
             task_map[matrix_id] = task.get("id")
+            pyrus_records.append({
+                "id": matrix_id,
+                "title": fields.get("title", ""),
+                "body": fields.get("body", ""),
+                "level": fields.get("level", ""),
+                "parent_id": fields.get("parent_id", "")
+            })
 
-    # 3. Получаем diff, обновления и удаления
-    from pyrus_procedures import xmind_diff, detect_updated_items, detect_deleted_items
-    diff_result = await xmind_diff(url)
-    updated_result = await detect_updated_items(url)
-    deleted_result = await detect_deleted_items(url)
+    pyrus_df = pd.DataFrame(pyrus_records)
+    pyrus_ids = set(pyrus_df["id"])
 
-    diff_items = diff_result["json"]
-    updated_items = updated_result["json"]
-    deleted_items = deleted_result["json"]
+    # === 3. DIFF: Новые (есть в XMind, нет в Pyrus) ===
+    new_items = xmind_df[~xmind_df["id"].isin(pyrus_ids)].copy()
+    new_items["action"] = "new"
+    new_items["task_id"] = ""
 
-    enriched = []
-    for item in diff_items:
-        item["task_id"] = ""
-        item["action"] = "new"
-        enriched.append(item)
-    for item in updated_items:
-        item["task_id"] = task_map.get(item["id"])
-        item["action"] = "update"
-        enriched.append(item)
-    for item in deleted_items:
-        item["task_id"] = task_map.get(item["id"])
-        item["action"] = "delete"
-        enriched.append(item)
+    # === 4. UPDATED: Совпадают по ID, но отличаются title/body ===
+    merged = pd.merge(xmind_df, pyrus_df, on="id", suffixes=("_x", "_y"))
+    updated_df = merged[(merged["title_x"] != merged["title_y"]) | (merged["body_x"] != merged["body_y"])]
+    updated_items = updated_df.rename(columns={
+        "title_x": "title", "body_x": "body",
+        "parent_id_x": "parent_id", "level_x": "level"
+    })[["id", "parent_id", "level", "title", "body"]].copy()
+    updated_items["action"] = "update"
+    updated_items["task_id"] = updated_items["id"].map(task_map)
 
-    # 4. Добавим CSV-таблицу всех элементов XMind (с task_id)
+    # === 5. DELETED: Есть в Pyrus, нет в XMind ===
+    deleted_items = pyrus_df[~pyrus_df["id"].isin(xmind_ids)].copy()
+    deleted_items["action"] = "delete"
+    deleted_items["task_id"] = deleted_items["id"].map(task_map)
+
+    # === 6. Объединение ===
+    enriched = pd.concat([new_items, updated_items, deleted_items], ignore_index=True)
+    records = enriched[["id", "parent_id", "level", "title", "body", "task_id", "action"]].to_dict(orient="records")
+
+    # === 7. CSV XMind ===
     xmind_df["task_id"] = xmind_df["id"].map(task_map)
     csv_records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
 
     return {
-        "content": format_as_markdown(enriched),
-        "json": enriched,
+        "content": format_as_markdown(records),
+        "json": records,
         "rows": csv_records
     }
