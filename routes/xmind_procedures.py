@@ -23,21 +23,31 @@ async def xmind_diff(url: str = Body(...)):
             raw_data = [json.loads(line) for line in raw_data.splitlines() if line.strip()]
     
     if isinstance(raw_data, dict):
-        raw_data = raw_data.get("tasks", [])
+        # Ищем первый список в значениях словаря
+        for value in raw_data.values():
+            if isinstance(value, list):
+                raw_data = value
+                break
+    
+    if not isinstance(raw_data, list):
+        raise ValueError("Pyrus data is not a list")
     
     pyrus_ids = {
         item["id"] for item in raw_data
         if isinstance(item, dict) and "id" in item
     }
 
-    # Передаем existing_ids в flatten_xmind_nodes
+    # Используем улучшенную версию с генерацией ID
     flat_xmind = flatten_xmind_nodes(content_json, existing_ids=pyrus_ids)
-    new_nodes = find_new_nodes(flat_xmind, pyrus_ids)
+
+    # Фильтруем только новые узлы
+    new_nodes = [n for n in flat_xmind if n["generated"]]
 
     return {
         "content": format_as_markdown(new_nodes),
         "json": new_nodes
     }
+
 
 # === SHARED PARSERS ============================================================
 def extract_xmind_nodes(file: io.BytesIO):
