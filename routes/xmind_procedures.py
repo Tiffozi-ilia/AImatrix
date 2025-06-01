@@ -281,185 +281,72 @@ async def pyrus_mapping(url: str = Body(...)):
     xmind_df["task_id"] = xmind_df["id"].map(task_map)
     csv_records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
 
+       # 6. Собираем JSON для Pyrus API
+    FIELD_IDS = {
+        "matrix_id": 1,
+        "level": 2,
+        "title": 3,
+        "parent_id": 4,
+        "body": 5,
+        "parent_name": 8
+    }
+
+    pyrus_payloads = {
+        "create": [],
+        "update": [],
+        "delete": []
+    }
+
+    for item in enriched:
+        data = {
+            "matrix_id": item.get("id"),
+            "level": item.get("level", ""),
+            "title": item.get("title", ""),
+            "body": item.get("body", ""),
+            "parent_id": item.get("parent_id", ""),
+            "parent_name": item.get("parent_name", "")
+        }
+
+        if item["action"] == "new":
+            payload = {
+                "form_id": 2309262,
+                "fields": [
+                    {"id": FIELD_IDS["matrix_id"], "value": data["matrix_id"]},
+                    {"id": FIELD_IDS["level"], "value": data["level"]},
+                    {"id": FIELD_IDS["title"], "value": data["title"]},
+                    {"id": FIELD_IDS["parent_id"], "value": data["parent_id"]},
+                    {"id": FIELD_IDS["body"], "value": data["body"]},
+                    {"id": FIELD_IDS["parent_name"], "value": data["parent_name"]}
+                ]
+            }
+            pyrus_payloads["create"].append(payload)
+
+        elif item["action"] == "update" and item.get("task_id"):
+            payload = {
+                "task_id": item["task_id"],
+                "url": f"/tasks/{item['task_id']}/comments",
+                "field_updates": [
+                    {"id": FIELD_IDS["matrix_id"], "value": data["matrix_id"]},
+                    {"id": FIELD_IDS["level"], "value": data["level"]},
+                    {"id": FIELD_IDS["title"], "value": data["title"]},
+                    {"id": FIELD_IDS["parent_id"], "value": data["parent_id"]},
+                    {"id": FIELD_IDS["body"], "value": data["body"]},
+                    {"id": FIELD_IDS["parent_name"], "value": data["parent_name"]}
+                ]
+            }
+            pyrus_payloads["update"].append(payload)
+
+        elif item["action"] == "delete" and item.get("task_id"):
+            payload = {
+                "task_id": item["task_id"],
+                "url": f"/tasks/{item['task_id']}"
+            }
+            pyrus_payloads["delete"].append(payload)
+
+    # 7. Возвращаем полный результат
     return {
         "content": format_as_markdown(enriched),
         "json": enriched,
-        "rows": csv_records
+        "rows": csv_records,
+        "pyrus_api": pyrus_payloads
     }
-
-#----------------------------- API --------------------------------------------------------------------------------------------------
-
-
-# ----------CONFIG----------
-PYRUS_URL = "https://api.pyrus.com/v4"
-FORM_ID = 2309262
-FIELD_IDS = {
-    "matrix_id": 1,
-    "level": 2,
-    "title": 3,
-    "parent_id": 4,
-    "body": 5,
-    "parent_name": 8
-}
-
-# ----------CREATE----------
-@router.post("/pyrus_create_items")
-async def pyrus_create_items(items: list = Body(...), dry_run: bool = False):
-    token = get_pyrus_token()
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    results = []
-
-    for item in items:
-        payload = {
-            "form_id": FORM_ID,
-            "field_values": [
-                {"id": FIELD_IDS["matrix_id"], "value": item["id"]},
-                {"id": FIELD_IDS["level"], "value": item["level"]},
-                {"id": FIELD_IDS["title"], "value": item["title"]},
-                {"id": FIELD_IDS["parent_id"], "value": item["parent_id"]},
-                {"id": FIELD_IDS["body"], "value": item["body"]},
-                {"id": FIELD_IDS["parent_name"], "value": item.get("parent_name", "")}
-            ]
-        }
-
-        if dry_run:
-            results.append({
-                "id": item["id"],
-                "status": "dry_run",
-                "payload": payload
-            })
-            continue
-
-        try:
-            response = requests.post(f"{PYRUS_URL}/tasks", json=payload, headers=headers)
-            response.raise_for_status()
-            results.append({
-                "id": item["id"],
-                "status": "created",
-                "response": response.json()
-            })
-        except Exception as e:
-            results.append({
-                "id": item["id"],
-                "status": "error",
-                "error": str(e),
-                "payload": payload
-            })
-
-    return results
-
-# ----------UPDATE----------
-@router.post("/pyrus_update_items")
-async def pyrus_update_items(items: list = Body(...), dry_run: bool = False):
-    token = get_pyrus_token()
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    results = []
-
-    for item in items:
-        if item.get("action") != "update":
-            continue
-
-        task_id = item.get("task_id")
-        if not task_id:
-            results.append({
-                "id": item.get("id"),
-                "status": "error",
-                "error": "Missing task_id for update"
-            })
-            continue
-
-        payload = {
-            "comment": "Auto update via AIMatrix",
-            "fields": [
-                {"id": FIELD_IDS["matrix_id"], "value": item.get("id", "")},
-                {"id": FIELD_IDS["level"], "value": item.get("level", "")},
-                {"id": FIELD_IDS["title"], "value": item.get("title", "")},
-                {"id": FIELD_IDS["parent_id"], "value": item.get("parent_id", "")},
-                {"id": FIELD_IDS["body"], "value": item.get("body", "")},
-                {"id": FIELD_IDS["parent_name"], "value": item.get("parent_name", "")}
-            ]
-        }
-
-        if dry_run:
-            results.append({
-                "id": item["id"],
-                "status": "dry_run",
-                "task_id": task_id,
-                "payload": payload
-            })
-            continue
-
-        try:
-            resp = requests.post(f"{PYRUS_URL}/tasks/{task_id}/comments", json=payload, headers=headers)
-            resp.raise_for_status()
-            results.append({
-                "id": item["id"],
-                "status": "updated",
-                "response": resp.json()
-            })
-        except Exception as e:
-            results.append({
-                "id": item["id"],
-                "status": "error",
-                "error": str(e),
-                "payload": payload
-            })
-
-    return results
-
-# ----------DELETE----------
-@router.post("/pyrus_delete_items")
-async def pyrus_delete_items(items: list = Body(...), dry_run: bool = False):
-    token = get_pyrus_token()
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    results = []
-
-    for item in items:
-        if item.get("action") != "delete":
-            continue
-
-        task_id = item.get("task_id")
-        if not task_id:
-            results.append({
-                "id": item.get("id"),
-                "status": "error",
-                "error": "Missing task_id for delete"
-            })
-            continue
-
-        payload = {"comment": "Auto closed by AIMatrix"}
-
-        if dry_run:
-            results.append({
-                "id": item["id"],
-                "status": "dry_run",
-                "task_id": task_id,
-                "payload": payload
-            })
-            continue
-
-        try:
-            resp = requests.put(f"{PYRUS_URL}/tasks/{task_id}/close", json=payload, headers=headers)
-            resp.raise_for_status()
-            results.append({
-                "id": item["id"],
-                "status": "deleted",
-                "response": resp.json()
-            })
-        except Exception as e:
-            results.append({
-                "id": item["id"],
-                "status": "error",
-                "error": str(e)
-            })
-
-    return results
