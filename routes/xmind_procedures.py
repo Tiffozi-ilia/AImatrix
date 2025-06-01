@@ -281,72 +281,73 @@ async def pyrus_mapping(url: str = Body(...)):
     xmind_df["task_id"] = xmind_df["id"].map(task_map)
     csv_records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
 
-       # 6. Собираем JSON для Pyrus API
-    FIELD_IDS = {
-        "matrix_id": 1,
-        "level": 2,
-        "title": 3,
-        "parent_id": 4,
-        "body": 5,
-        "parent_name": 8
-    }
-
-    pyrus_payloads = {
-        "create": [],
-        "update": [],
-        "delete": []
-    }
-
-    for item in enriched:
-        data = {
-            "matrix_id": item.get("id"),
-            "level": item.get("level", ""),
-            "title": item.get("title", ""),
-            "body": item.get("body", ""),
-            "parent_id": item.get("parent_id", ""),
-            "parent_name": item.get("parent_name", "")
-        }
-
-        if item["action"] == "new":
-            payload = {
-                "form_id": 2309262,
-                "fields": [
-                    {"id": FIELD_IDS["matrix_id"], "value": data["matrix_id"]},
-                    {"id": FIELD_IDS["level"], "value": data["level"]},
-                    {"id": FIELD_IDS["title"], "value": data["title"]},
-                    {"id": FIELD_IDS["parent_id"], "value": data["parent_id"]},
-                    {"id": FIELD_IDS["body"], "value": data["body"]},
-                    {"id": FIELD_IDS["parent_name"], "value": data["parent_name"]}
-                ]
-            }
-            pyrus_payloads["create"].append(payload)
-
-        elif item["action"] == "update" and item.get("task_id"):
-            payload = {
-                "task_id": item["task_id"],
-                "url": f"/tasks/{item['task_id']}/comments",
-                "field_updates": [
-                    {"id": FIELD_IDS["matrix_id"], "value": data["matrix_id"]},
-                    {"id": FIELD_IDS["level"], "value": data["level"]},
-                    {"id": FIELD_IDS["title"], "value": data["title"]},
-                    {"id": FIELD_IDS["parent_id"], "value": data["parent_id"]},
-                    {"id": FIELD_IDS["body"], "value": data["body"]},
-                    {"id": FIELD_IDS["parent_name"], "value": data["parent_name"]}
-                ]
-            }
-            pyrus_payloads["update"].append(payload)
-
-        elif item["action"] == "delete" and item.get("task_id"):
-            payload = {
-                "task_id": item["task_id"],
-                "url": f"/tasks/{item['task_id']}"
-            }
-            pyrus_payloads["delete"].append(payload)
-
-    # 7. Возвращаем полный результат
     return {
         "content": format_as_markdown(enriched),
         "json": enriched,
-        "rows": csv_records,
-        "pyrus_api": pyrus_payloads
+        "rows": csv_records
     }
+endpoints = {
+    "DIFF": f"{base}/xmind-diff",
+    "UPDATED": f"{base}/xmind-updated",
+    "DELETED": f"{base}/xmind-delete",
+    "MAPPING": f"{base}/pyrus_mapping"
+}
+
+results = {}
+
+# Добавьте ваш токен авторизации
+headers = {"Authorization": "Bearer YOUR_ACCESS_TOKEN"}
+
+for name, url in endpoints.items():
+    print(f"\n\n{'='*40}")
+    print(f"=== {name} ===")
+    print(f"{'='*40}")
+    
+    try:
+        # Используем JSON вместо data для правильной сериализации
+        response = requests.post(url, json={"url": "YOUR_XMIND_SHARE_URL"}, headers=headers)
+        print("Status code:", response.status_code)
+
+        if response.status_code != 200:
+            print("Error response:", response.text)
+            continue
+
+        data = response.json()
+        results[name] = data
+
+        # Вывод основных данных
+        print("\nSummary:")
+        for key in ["json", "rows", "pyrus_requests"]:
+            if key in data:
+                items = data[key]
+                count = len(items) if isinstance(items, list) else "-"
+                print(f"- {key}: {count} items")
+        
+        # Детальный вывод для MAPPING
+        if name == "MAPPING" and "pyrus_requests" in data:
+            print("\nPyrus Requests Samples:")
+            for i, req in enumerate(data["pyrus_requests"][:3]):  # Первые 3 запроса
+                print(f"\nRequest #{i+1}:")
+                print(f"Method: {req['method']}")
+                print(f"URL: {req['url']}")
+                
+                if "body" in req:
+                    print("Body structure:")
+                    # Сокращенный вывод тела запроса
+                    if "fields" in req["body"]:
+                        print(f"  fields: {len(req['body']['fields']} items")
+                    if "field_updates" in req["body"]:
+                        print(f"  field_updates: {len(req['body']['field_updates']} items")
+                
+                print("-"*30)
+        
+        # Сохранение полных данных в файл
+        filename = f"{name.lower()}_output.json"
+        with open(filename, "w") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        print(f"\nFull output saved to {filename}")
+
+    except Exception as e:
+        print(f"❌ Request failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
