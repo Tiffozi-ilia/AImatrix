@@ -281,11 +281,7 @@ async def pyrus_mapping(url: str = Body(...)):
     xmind_df["task_id"] = xmind_df["id"].map(task_map)
     csv_records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
 
-    return {
-        "content": format_as_markdown(enriched),
-        "json": enriched,
-        "rows": csv_records
-    }
+
     # === 6. Готовим JSON для выгрузки в Pyrus ==================================
 
     def build_fields(item):
