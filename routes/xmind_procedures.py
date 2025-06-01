@@ -291,8 +291,7 @@ async def pyrus_mapping(url: str = Body(...)):
             {"id": 3, "value": item["title"]},
             {"id": 4, "value": item["parent_id"]},
             {"id": 5, "value": item["body"]},
-            {"id": 8, "value": item.get("parent_name", "")},
-        ]
+                    ]
 
     json_new = [
         {
