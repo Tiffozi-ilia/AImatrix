@@ -303,7 +303,7 @@ async def pyrus_mapping(url: str = Body(...)):
                 "fields": build_fields(item)
             }
         }
-        for item in new_items
+        for item in enriched if item["action"] == "new"
     ]
 
     json_updated = [
