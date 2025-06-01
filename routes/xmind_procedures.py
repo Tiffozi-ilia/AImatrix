@@ -362,33 +362,54 @@ async def pyrus_update_items(items: list = Body(...), dry_run: bool = False):
     results = []
 
     for item in items:
+        if item.get("action") != "update":
+            continue
+
         task_id = item.get("task_id")
         if not task_id:
-            results.append({"id": item["id"], "status": "error", "error": "Missing task_id"})
+            results.append({
+                "id": item.get("id"),
+                "status": "error",
+                "error": "Missing task_id for update"
+            })
             continue
 
         payload = {
             "comment": "Auto update via AIMatrix",
             "fields": [
-                {"id": FIELD_IDS["matrix_id"], "value": item["id"]},
-                {"id": FIELD_IDS["level"], "value": item["level"]},
-                {"id": FIELD_IDS["title"], "value": item["title"]},
-                {"id": FIELD_IDS["parent_id"], "value": item["parent_id"]},
-                {"id": FIELD_IDS["body"], "value": item["body"]},
+                {"id": FIELD_IDS["matrix_id"], "value": item.get("id", "")},
+                {"id": FIELD_IDS["level"], "value": item.get("level", "")},
+                {"id": FIELD_IDS["title"], "value": item.get("title", "")},
+                {"id": FIELD_IDS["parent_id"], "value": item.get("parent_id", "")},
+                {"id": FIELD_IDS["body"], "value": item.get("body", "")},
                 {"id": FIELD_IDS["parent_name"], "value": item.get("parent_name", "")}
             ]
         }
 
         if dry_run:
-            results.append({"id": item["id"], "status": "dry_run", "task_id": task_id, "payload": payload})
+            results.append({
+                "id": item["id"],
+                "status": "dry_run",
+                "task_id": task_id,
+                "payload": payload
+            })
             continue
 
         try:
-            response = requests.post(f"{PYRUS_URL}/tasks/{task_id}/comments", json=payload, headers=headers)
-            response.raise_for_status()
-            results.append({"id": item["id"], "status": "updated", "response": response.json()})
+            resp = requests.post(f"{PYRUS_URL}/tasks/{task_id}/comments", json=payload, headers=headers)
+            resp.raise_for_status()
+            results.append({
+                "id": item["id"],
+                "status": "updated",
+                "response": resp.json()
+            })
         except Exception as e:
-            results.append({"id": item["id"], "status": "error", "error": str(e), "payload": payload})
+            results.append({
+                "id": item["id"],
+                "status": "error",
+                "error": str(e),
+                "payload": payload
+            })
 
     return results
 
@@ -403,22 +424,42 @@ async def pyrus_delete_items(items: list = Body(...), dry_run: bool = False):
     results = []
 
     for item in items:
+        if item.get("action") != "delete":
+            continue
+
         task_id = item.get("task_id")
         if not task_id:
-            results.append({"id": item["id"], "status": "error", "error": "Missing task_id"})
+            results.append({
+                "id": item.get("id"),
+                "status": "error",
+                "error": "Missing task_id for delete"
+            })
             continue
 
         payload = {"comment": "Auto closed by AIMatrix"}
 
         if dry_run:
-            results.append({"id": item["id"], "status": "dry_run", "task_id": task_id, "payload": payload})
+            results.append({
+                "id": item["id"],
+                "status": "dry_run",
+                "task_id": task_id,
+                "payload": payload
+            })
             continue
 
         try:
-            response = requests.put(f"{PYRUS_URL}/tasks/{task_id}/close", json=payload, headers=headers)
-            response.raise_for_status()
-            results.append({"id": item["id"], "status": "deleted", "response": response.json()})
+            resp = requests.put(f"{PYRUS_URL}/tasks/{task_id}/close", json=payload, headers=headers)
+            resp.raise_for_status()
+            results.append({
+                "id": item["id"],
+                "status": "deleted",
+                "response": resp.json()
+            })
         except Exception as e:
-            results.append({"id": item["id"], "status": "error", "error": str(e)})
+            results.append({
+                "id": item["id"],
+                "status": "error",
+                "error": str(e)
+            })
 
     return results
