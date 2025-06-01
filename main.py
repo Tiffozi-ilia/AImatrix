@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routes import json_export, md_full, md_clean, zip_export, csv_export, excel_export, opml_export, mm_export, xmind_export, pyrus_upload, xmind_procedures, xmind_diff
+from routes import json_export, md_full, md_clean, zip_export, csv_export, excel_export, opml_export, mm_export, xmind_export, pyrus_upload, xmind_procedures
 
 
 app = FastAPI()
@@ -15,4 +15,3 @@ app.include_router(mm_export.router)
 app.include_router(xmind_export.router)
 app.include_router(pyrus_upload.router)
 app.include_router(xmind_procedures.router)
-app.include_router(xmind_diff.router)
