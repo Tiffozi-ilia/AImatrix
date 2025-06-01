@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Body
 import zipfile, io, json, requests
 import pandas as pd
-from utils.data_loader import get_data
+from utils.data_loader import get_data, get_pyrus_token
 from utils.diff_engine import format_as_markdown
 from utils.xmind_parser import flatten_xmind_nodes
 
@@ -288,11 +288,7 @@ async def pyrus_mapping(url: str = Body(...)):
     }
 
 #----------------------------- API --------------------------------------------------------------------------------------------------
-from fastapi import APIRouter, Body
-import requests
-from utils.data_loader import get_pyrus_token
 
-router = APIRouter()
 
 # ----------CONFIG----------
 PYRUS_URL = "https://api.pyrus.com/v4"
