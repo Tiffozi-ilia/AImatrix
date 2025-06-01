@@ -286,3 +286,56 @@ async def pyrus_mapping(url: str = Body(...)):
         "json": enriched,
         "rows": csv_records
     }
+    # === 6. Готовим JSON для выгрузки в Pyrus ==================================
+
+    def build_fields(item):
+        return [
+            {"id": 1, "value": item["id"]},
+            {"id": 2, "value": item["level"]},
+            {"id": 3, "value": item["title"]},
+            {"id": 4, "value": item["parent_id"]},
+            {"id": 5, "value": item["body"]},
+            {"id": 8, "value": item.get("parent_name", "")},
+        ]
+
+    json_new = [
+        {
+            "method": "POST",
+            "endpoint": "/tasks",
+            "payload": {
+                "form_id": 2309262,
+                "fields": build_fields(item)
+            }
+        }
+        for item in new_items
+    ]
+
+    json_updated = [
+        {
+            "method": "POST",
+            "endpoint": f"/tasks/{item['task_id']}/comments",
+            "payload": {
+                "field_updates": build_fields(item)
+            }
+        }
+        for item in updated_items if item.get("task_id")
+    ]
+
+    json_deleted = [
+        {
+            "method": "DELETE",
+            "endpoint": f"/tasks/{item['task_id']}"
+        }
+        for item in deleted_items if item.get("task_id")
+    ]
+
+    return {
+        "content": format_as_markdown(enriched),
+        "json": enriched,
+        "rows": csv_records,
+        "for_pyrus": {
+            "new": json_new,
+            "updated": json_updated,
+            "deleted": json_deleted
+        }
+    }
