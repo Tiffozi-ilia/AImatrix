@@ -286,3 +286,49 @@ async def pyrus_mapping(url: str = Body(...)):
         "json": enriched,
         "rows": csv_records
     }
+# ----------------- pyrus_create_new -----------------
+from fastapi import APIRouter, Body
+import requests
+from utils.data_loader import get_pyrus_token
+
+router = APIRouter()
+
+FIELD_IDS = {
+    "matrix_id": 1,
+    "level": 2,
+    "title": 3,
+    "parent_id": 4,
+    "body": 5,
+    "parent_name": 8
+}
+
+FORM_ID = 2309262
+LOCAL_URL = "https://aimatrix-e8zs.onrender.com"
+
+@router.post("/pyrus_create_new")
+async def pyrus_create_new(url: str = Body(...)):
+    try:
+        # 1. Получаем результат маппинга
+        resp = requests.post(f"{LOCAL_URL}/pyrus_mapping", json={"url": url})
+        actions = resp.json().get("json", [])
+        new_items = [a for a in actions if a.get("action") == "new"]
+    except Exception as e:
+        return {"error": f"Ошибка получения mapping: {e}"}
+
+    # 2. Собираем payload'ы для API Pyrus
+    payloads = []
+    for item in new_items:
+        payloads.append({
+            "form_id": FORM_ID,
+            "field_values": [
+                {"id": FIELD_IDS["matrix_id"], "value": item["id"]},
+                {"id": FIELD_IDS["title"], "value": item["title"]},
+                {"id": FIELD_IDS["body"], "value": item["body"]},
+                {"id": FIELD_IDS["level"], "value": item["level"]},
+                {"id": FIELD_IDS["parent_id"], "value": item["parent_id"]},
+                {"id": FIELD_IDS["parent_name"], "value": item.get("parent_name", "")}
+            ]
+        })
+
+    return {"pyrus_payloads": payloads, "count": len(payloads)}
+
