@@ -286,5 +286,177 @@ async def pyrus_mapping(url: str = Body(...)):
         "json": enriched,
         "rows": csv_records
     }
+# ----------------- API -----------------
+from fastapi import APIRouter, Body
+import requests
+from utils.data_loader import get_pyrus_token
 
+router = APIRouter()
 
+# ----------CONFIG----------
+PYRUS_URL = "https://api.pyrus.com/v4"
+FORM_ID = 2309262
+FIELD_IDS = {
+    "matrix_id": 1,
+    "level": 2,
+    "title": 3,
+    "parent_id": 4,
+    "body": 5,
+    "parent_name": 8
+}
+
+# ----------CREATE----------
+@router.post("/pyrus_create_items")
+async def pyrus_create_items(items: list = Body(...), dry_run: bool = False):
+    token = get_pyrus_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    results = []
+
+    for item in items:
+        payload = {
+            "form_id": FORM_ID,
+            "field_values": [
+                {"id": FIELD_IDS["matrix_id"], "value": item["id"]},
+                {"id": FIELD_IDS["level"], "value": item["level"]},
+                {"id": FIELD_IDS["title"], "value": item["title"]},
+                {"id": FIELD_IDS["parent_id"], "value": item["parent_id"]},
+                {"id": FIELD_IDS["body"], "value": item["body"]},
+                {"id": FIELD_IDS["parent_name"], "value": item.get("parent_name", "")}
+            ]
+        }
+
+        if dry_run:
+            results.append({
+                "id": item["id"],
+                "status": "dry_run",
+                "payload": payload
+            })
+            continue
+
+        try:
+            response = requests.post(f"{PYRUS_URL}/tasks", json=payload, headers=headers)
+            response.raise_for_status()
+            results.append({
+                "id": item["id"],
+                "status": "created",
+                "response": response.json()
+            })
+        except Exception as e:
+            results.append({
+                "id": item["id"],
+                "status": "error",
+                "error": str(e),
+                "payload": payload
+            })
+
+    return results
+
+# ----------UPDATE----------
+@router.post("/pyrus_update_items")
+async def pyrus_update_items(items: list = Body(...), dry_run: bool = False):
+    token = get_pyrus_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    results = []
+
+    for item in items:
+        if "task_id" not in item or not item["task_id"]:
+            results.append({
+                "id": item["id"],
+                "status": "error",
+                "error": "Missing task_id for update"
+            })
+            continue
+
+        payload = {
+            "field_values": [
+                {"id": FIELD_IDS["matrix_id"], "value": item["id"]},
+                {"id": FIELD_IDS["level"], "value": item["level"]},
+                {"id": FIELD_IDS["title"], "value": item["title"]},
+                {"id": FIELD_IDS["parent_id"], "value": item["parent_id"]},
+                {"id": FIELD_IDS["body"], "value": item["body"]}
+            ]
+        }
+
+        if dry_run:
+            results.append({
+                "id": item["id"],
+                "status": "dry_run",
+                "task_id": item["task_id"],
+                "payload": payload
+            })
+            continue
+
+        try:
+            response = requests.patch(
+                f"{PYRUS_URL}/tasks/{item['task_id']}",
+                json=payload,
+                headers=headers
+            )
+            response.raise_for_status()
+            results.append({
+                "id": item["id"],
+                "status": "updated",
+                "response": response.json()
+            })
+        except Exception as e:
+            results.append({
+                "id": item["id"],
+                "status": "error",
+                "error": str(e),
+                "payload": payload
+            })
+
+    return results
+
+# ----------DELETE----------
+@router.post("/pyrus_delete_items")
+async def pyrus_delete_items(items: list = Body(...), dry_run: bool = False):
+    token = get_pyrus_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    results = []
+
+    for item in items:
+        if "task_id" not in item or not item["task_id"]:
+            results.append({
+                "id": item["id"],
+                "status": "error",
+                "error": "Missing task_id for delete"
+            })
+            continue
+
+        if dry_run:
+            results.append({
+                "id": item["id"],
+                "status": "dry_run",
+                "task_id": item["task_id"]
+            })
+            continue
+
+        try:
+            response = requests.post(
+                f"{PYRUS_URL}/tasks/{item['task_id']}/close",
+                headers=headers
+            )
+            response.raise_for_status()
+            results.append({
+                "id": item["id"],
+                "status": "deleted",
+                "response": response.json()
+            })
+        except Exception as e:
+            results.append({
+                "id": item["id"],
+                "status": "error",
+                "error": str(e)
+            })
+
+    return results
