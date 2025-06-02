@@ -230,7 +230,7 @@ async def pyrus_mapping(url: str = Body(...)):
     except Exception as e:
         return {"error": f"Не удалось загрузить JSON из Pyrus: {e}"}
 
-    # Строим маппинг ID задач
+    # 3. Строим маппинг ID задач
     task_map = {}
     pyrus_ids = set()
     for task in raw:
@@ -240,17 +240,17 @@ async def pyrus_mapping(url: str = Body(...)):
             pyrus_ids.add(matrix_id)
             task_map[matrix_id] = task.get("id")
 
-    # 3. Разворачиваем XMind и фильтруем только реально новые
+    # 4. Разворачиваем XMind и фильтруем реально новые (независимо от generated)
     flat_xmind = flatten_xmind_nodes(content_json)
-    new_nodes = [n for n in flat_xmind if n.get("generated") and str(n["id"]) not in pyrus_ids]
+    new_nodes = [n for n in flat_xmind if str(n.get("id", "")).strip() not in pyrus_ids]
 
-    # 4. Получаем обновления и удаления
+    # 5. Получаем обновления и удаления
     updated_result = await detect_updated_items(url)
     deleted_result = await detect_deleted_items(url)
     updated_items = updated_result["json"]
     deleted_items = deleted_result["json"]
 
-    # 5. Добавляем новые элементы
+    # 6. Добавляем новые элементы
     new_items = [
         {
             "id": n["id"],
@@ -262,7 +262,7 @@ async def pyrus_mapping(url: str = Body(...)):
         for n in new_nodes
     ]
 
-    # 6. Обогащаем всеми действиями
+    # 7. Обогащаем всеми действиями
     enriched = []
 
     for item in updated_items:
@@ -280,7 +280,7 @@ async def pyrus_mapping(url: str = Body(...)):
         item["action"] = "new"
         enriched.append(item)
 
-    # 7. Проверка на пустые поля
+    # 8. Формируем JSON для выгрузки в Pyrus
     def build_fields(item):
         return [
             {"id": 1, "value": item["id"]},
@@ -290,13 +290,6 @@ async def pyrus_mapping(url: str = Body(...)):
             {"id": 5, "value": item["body"]},
         ]
 
-    for item in enriched:
-        if item["action"] == "new":
-            fields = build_fields(item)
-            if not fields:
-                print("⚠️ EMPTY FIELDS for:", item)
-
-    # 8. Формируем JSON для Pyrus
     json_new = [
         {
             "method": "POST",
@@ -333,6 +326,7 @@ async def pyrus_mapping(url: str = Body(...)):
     xmind_df["task_id"] = xmind_df["id"].map(task_map)
     csv_records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
 
+    # 10. Финальный возврат
     return {
         "content": format_as_markdown(enriched),
         "json": enriched,
@@ -344,55 +338,3 @@ async def pyrus_mapping(url: str = Body(...)):
         }
     }
 
-       # === 6. Готовим JSON для выгрузки в Pyrus ==================================
-
-    def build_fields(item):
-        return [
-            {"id": 1, "value": item["id"]},
-            {"id": 2, "value": item["level"]},
-            {"id": 3, "value": item["title"]},
-            {"id": 4, "value": item["parent_id"]},
-            {"id": 5, "value": item["body"]},
-                    ]
-
-    json_new = [
-        {
-            "method": "POST",
-            "endpoint": "/tasks",
-            "payload": {
-                "form_id": 2309262,
-                "fields": build_fields(item)
-            }
-        }
-        for item in enriched if item["action"] == "new"
-    ]
-
-    json_updated = [
-        {
-            "method": "POST",
-            "endpoint": f"/tasks/{item['task_id']}/comments",
-            "payload": {
-                "field_updates": build_fields(item)
-            }
-        }
-        for item in updated_items if item.get("task_id")
-    ]
-
-    json_deleted = [
-        {
-            "method": "DELETE",
-            "endpoint": f"/tasks/{item['task_id']}"
-        }
-        for item in deleted_items if item.get("task_id")
-    ]
-
-    return {
-        "content": format_as_markdown(enriched),
-        "json": enriched,
-        "rows": csv_records,
-        "for_pyrus": {
-            "new": json_new,
-            "updated": json_updated,
-            "deleted": json_deleted
-        }
-    }
