@@ -1,37 +1,133 @@
 from fastapi import APIRouter, Body
 import zipfile, io, json, requests
 import pandas as pd
-from utils.data_loader import get_data
+from utils.data_loader import get_data, get_pyrus_token
 from utils.diff_engine import format_as_markdown
+from utils.xmind_parser import flatten_xmind_nodes
 
 router = APIRouter()
 
-# === ОБЩИЕ ФУНКЦИИ ПАРСИНГА ===================================================
+# === DIFF ======================================================================
+@router.post("/xmind-diff")
+async def xmind_diff(url: str = Body(...)):
+    content = requests.get(url).content
+    with zipfile.ZipFile(io.BytesIO(content)) as z:
+        content_json = json.loads(z.read("content.json"))
 
+    flat_xmind = flatten_xmind_nodes(content_json)
+
+    raw_data = get_data()
+    if isinstance(raw_data, str):
+        try:
+            raw_data = json.loads(raw_data)
+        except json.JSONDecodeError:
+            raw_data = [json.loads(line) for line in raw_data.splitlines() if line.strip()]
+    if isinstance(raw_data, dict):
+        for value in raw_data.values():
+            if isinstance(value, list):
+                raw_data = value
+                break
+    if not isinstance(raw_data, list):
+        raise ValueError("Pyrus data is not a list")
+
+    # Собираем все существующие ID из Pyrus как строки
+    pyrus_ids = {
+        str(item["id"]) for item in raw_data
+        if isinstance(item, dict) and "id" in item
+    }
+
+    # Создаем словарь для отслеживания максимальных номеров для каждого родителя
+    max_numbers = {}
+    all_existing_ids = set(pyrus_ids)
+    
+    # Анализируем существующие ID, чтобы найти максимальные номера
+    for item_id in all_existing_ids:
+        # Проверяем, что ID содержит точку и имеет числовую часть
+        if isinstance(item_id, str) and '.' in item_id:
+            parts = item_id.split('.')
+            # Проверяем, что последняя часть - число
+            if parts[-1].isdigit():
+                base = '.'.join(parts[:-1])
+                number = int(parts[-1])
+                if base not in max_numbers or number > max_numbers[base]:
+                    max_numbers[base] = number
+    
+    # Анализируем ID из XMind, чтобы обновить максимальные номера
+    for node in flat_xmind:
+        node_id = node.get("id")
+        if node_id:
+            # Приводим ID к строке для единообразия
+            node_id_str = str(node_id)
+            if '.' in node_id_str:
+                parts = node_id_str.split('.')
+                if parts[-1].isdigit():
+                    base = '.'.join(parts[:-1])
+                    number = int(parts[-1])
+                    if base not in max_numbers or number > max_numbers[base]:
+                        max_numbers[base] = number
+    
+    used_ids = set(all_existing_ids)
+    new_nodes = []
+    
+    for node in flat_xmind:
+        node_id = node.get("id")
+        parent_id = node.get("parent_id", "")
+        
+        # Приводим ID к строке
+        node_id_str = str(node_id) if node_id else ""
+        
+        # Если ID отсутствует или конфликтует
+        if not node_id_str or node_id_str in used_ids:
+            # Определяем базовый префикс
+            base = str(parent_id) if parent_id else "x"
+            
+            # Получаем текущий максимальный номер для этого базового префикса
+            current_max = max_numbers.get(base, 0)
+            new_number = current_max + 1
+            
+            # Генерируем новый ID
+            new_id = f"{base}.{str(new_number).zfill(2)}"
+            
+            # Обновляем данные узла
+            node["id"] = new_id
+            node["generated"] = True
+            
+            # Обновляем максимальный номер для этого базового префикса
+            max_numbers[base] = new_number
+            used_ids.add(new_id)
+        else:
+            # Если ID валиден, сохраняем его как использованный
+            used_ids.add(node_id_str)
+        
+        # Добавляем в new_nodes если это новый узел
+        if node.get("generated") and node["id"] not in pyrus_ids:
+            new_nodes.append(node)
+
+    return {
+        "content": format_as_markdown(new_nodes),
+        "json": new_nodes
+    }
+# === SHARED PARSERS ============================================================
 def extract_xmind_nodes(file: io.BytesIO):
-    """Единый парсер XMind с корректной обработкой parent_id и level"""
     with zipfile.ZipFile(file) as z:
         content_json = json.loads(z.read("content.json"))
 
     def walk(node, parent_id="", level=0):
         label = node.get("labels", [])
-        node_id = label[0].strip() if label else ""
-        title = node.get("title", "").strip()
-        body = node.get("notes", {}).get("plain", {}).get("content", "").strip()
+        node_id = label[0] if label else None
+        title = node.get("title", "")
+        body = node.get("notes", {}).get("plain", {}).get("content", "")
         rows = []
-        
         if node_id:
             rows.append({
-                "id": node_id,
-                "title": title,
-                "body": body,
-                "level": int(level),  # Гарантированное число
-                "parent_id": parent_id.strip() if parent_id else ""  # Пустая строка вместо "+"
+                "id": node_id.strip(),
+                "title": title.strip(),
+                "body": body.strip(),
+                "level": str(level),
+                "parent_id": parent_id.strip()
             })
-            
         for child in node.get("children", {}).get("attached", []):
             rows.extend(walk(child, node_id, level + 1))
-            
         return rows
 
     root_topic = content_json[0].get("rootTopic", {})
@@ -39,7 +135,6 @@ def extract_xmind_nodes(file: io.BytesIO):
 
 
 def extract_pyrus_data():
-    """Единый парсер данных Pyrus с консистентными форматами"""
     raw = get_data()
     if isinstance(raw, str):
         try:
@@ -57,218 +152,197 @@ def extract_pyrus_data():
     rows = []
     for task in raw:
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
-        
-        # Преобразуем уровень в число
-        level_str = fields.get("level", "")
-        level = int(level_str) if level_str and level_str.isdigit() else 0
-        
         rows.append({
             "id": fields.get("matrix_id", "").strip(),
             "title": fields.get("title", "").strip(),
             "body": fields.get("body", "").strip(),
-            "level": level,  # Числовой формат
-            "parent_id": fields.get("parent_id", "").strip(),
-            "task_id": task.get("id")  # Добавляем task_id для связи
+            "level": str(fields.get("level", "")).strip(),
+            "parent_id": fields.get("parent_id", "").strip()
         })
-        
     return pd.DataFrame(rows)
 
-
-# === API ENDPOINTS =============================================================
-
-@router.post("/xmind-diff")
-async def xmind_diff(url: str = Body(...)):
-    """Поиск новых элементов в XMind относительно Pyrus"""
-    try:
-        content = requests.get(url).content
-        xmind_df = extract_xmind_nodes(io.BytesIO(content))
-        xmind_records = xmind_df.to_dict(orient='records')
-        
-        pyrus_df = extract_pyrus_data()
-        pyrus_ids = set(pyrus_df['id'])
-        
-        # Находим новые элементы (отсутствующие в Pyrus)
-        new_items = [item for item in xmind_records if item['id'] not in pyrus_ids]
-        
-        return {
-            "content": format_as_markdown(new_items),
-            "json": new_items
-        }
-    except Exception as e:
-        return {"error": f"XMind diff error: {str(e)}"}
-
-
+# === UPDATED ===================================================================
 @router.post("/xmind-updated")
 async def detect_updated_items(url: str = Body(...)):
-    """Поиск измененных элементов в XMind относительно Pyrus"""
-    try:
-        content = requests.get(url).content
-        xmind_df = extract_xmind_nodes(io.BytesIO(content))
-        pyrus_df = extract_pyrus_data()
-        
-        # Слияние данных по ID
-        merged = pd.merge(
-            xmind_df, 
-            pyrus_df, 
-            on="id", 
-            suffixes=("_xmind", "_pyrus"),
-            how="inner"
-        )
-        
-        # Поиск изменений в основных полях
-        changed_mask = (
-            (merged["title_xmind"] != merged["title_pyrus"]) |
-            (merged["body_xmind"] != merged["body_pyrus"]) |
-            (merged["level_xmind"] != merged["level_pyrus"]) |
-            (merged["parent_id_xmind"] != merged["parent_id_pyrus"])
-        )
-        
-        diffs = merged[changed_mask]
-        
-        # Форматирование результата
-        records = diffs.rename(columns={
-            "title_xmind": "title",
-            "body_xmind": "body",
-            "parent_id_xmind": "parent_id",
-            "level_xmind": "level"
-        })[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
+    content = requests.get(url).content
+    xmind_df = extract_xmind_nodes(io.BytesIO(content))
+    pyrus_df = extract_pyrus_data()
 
-        return {
-            "content": format_as_markdown(records),
-            "json": records
-        }
-    except Exception as e:
-        return {"error": f"Updated items error: {str(e)}"}
+    merged = pd.merge(xmind_df, pyrus_df, on="id", suffixes=("_xmind", "_pyrus"))
+    diffs = merged[(merged["title_xmind"] != merged["title_pyrus"]) |
+                   (merged["body_xmind"] != merged["body_pyrus"])]
 
+    records = diffs.rename(columns={
+        "title_xmind": "title",
+        "body_xmind": "body",
+        "parent_id_xmind": "parent_id",
+        "level_xmind": "level"
+    })[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
 
+    return {
+        "content": format_as_markdown(records),
+        "json": records
+    }
+
+# === DELETE ====================================================================
 @router.post("/xmind-delete")
 async def detect_deleted_items(url: str = Body(...)):
-    """Поиск удаленных в XMind элементов (есть в Pyrus, но нет в XMind)"""
-    try:
-        content = requests.get(url).content
-        xmind_df = extract_xmind_nodes(io.BytesIO(content))
-        pyrus_df = extract_pyrus_data()
-        
-        # Находим элементы, отсутствующие в XMind
-        deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])]
-        records = deleted[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
+    content = requests.get(url).content
+    xmind_df = extract_xmind_nodes(io.BytesIO(content))
+    pyrus_df = extract_pyrus_data()
 
-        return {
-            "content": format_as_markdown(records),
-            "json": records
-        }
-    except Exception as e:
-        return {"error": f"Deleted items error: {str(e)}"}
+    deleted = pyrus_df[~pyrus_df["id"].isin(xmind_df["id"])]
+    records = deleted[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
 
+    return {
+        "content": format_as_markdown(records),
+        "json": records
+    }
 
+# === MAPPING (Stage 1: только CSV из JSON) ====================================
 @router.post("/pyrus_mapping")
 async def pyrus_mapping(url: str = Body(...)):
-    """Формирование полного плана синхронизации с Pyrus"""
+    import requests
+    import zipfile
+    import io
+    import json
+    import pandas as pd
+
+    # 1. Скачиваем и парсим XMind
     try:
-        # 1. Загрузка и парсинг данных
         content = requests.get(url).content
-        xmind_df = extract_xmind_nodes(io.BytesIO(content))
-        xmind_records = xmind_df.to_dict(orient='records')
-        
-        pyrus_df = extract_pyrus_data()
-        pyrus_records = pyrus_df.to_dict(orient='records')
-        
-        # 2. Построение маппинга task_id
-        task_map = {item['id']: item['task_id'] for item in pyrus_records if item['id']}
-        
-        # 3. Определение изменений
-        pyrus_ids = set(task_map.keys())
-        xmind_ids = set(item['id'] for item in xmind_records)
-        
-        # Новые элементы (есть в XMind, но нет в Pyrus)
-        new_items = [item for item in xmind_records if item['id'] not in pyrus_ids]
-        
-        # Удаленные элементы (есть в Pyrus, но нет в XMind)
-        deleted_items = [item for item in pyrus_records if item['id'] not in xmind_ids]
-        
-        # Измененные элементы (есть в обоих, но различаются)
-        updated_items = []
-        for xmind_item in xmind_records:
-            if xmind_item['id'] in pyrus_ids:
-                pyrus_item = next(item for item in pyrus_records if item['id'] == xmind_item['id'])
-                if (xmind_item['title'] != pyrus_item['title'] or 
-                    xmind_item['body'] != pyrus_item['body'] or
-                    xmind_item['level'] != pyrus_item['level'] or
-                    xmind_item['parent_id'] != pyrus_item['parent_id']):
-                    updated_items.append(xmind_item)
-        
-        # 4. Обогащение данных
-        enriched = []
-        for item in new_items:
-            item['action'] = 'new'
-            item['task_id'] = None
-            enriched.append(item)
-        
-        for item in updated_items:
-            item['action'] = 'update'
-            item['task_id'] = task_map.get(item['id'])
-            enriched.append(item)
-        
-        for item in deleted_items:
-            item['action'] = 'delete'
-            item['task_id'] = task_map.get(item['id'])
-            enriched.append(item)
-        
-        # 5. Формирование запросов для Pyrus
-        def build_fields(item):
-            return [
-                {"id": 1, "value": item.get("id", "")},
-                {"id": 2, "value": str(item.get("level", 0))},  # Конвертация в строку
-                {"id": 3, "value": item.get("title", "")},
-                {"id": 4, "value": item.get("parent_id", "")},
-                {"id": 5, "value": item.get("body", "")}
-            ]
-        
-        json_new = [{
+        with zipfile.ZipFile(io.BytesIO(content)) as z:
+            content_json = json.loads(z.read("content.json"))
+    except Exception as e:
+        return {"error": f"Не удалось загрузить XMind: {e}"}
+
+    # Используем flatten_xmind_nodes для получения новых элементов
+    flat_xmind = flatten_xmind_nodes(content_json)
+    new_nodes = [n for n in flat_xmind if n.get("generated")]
+
+    # 2. Загружаем данные из Pyrus
+    try:
+        raw = get_data()
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        if isinstance(raw, dict):
+            raw = raw.get("tasks", [])
+    except Exception as e:
+        return {"error": f"Не удалось загрузить JSON из Pyrus: {e}"}
+
+    # Строим маппинг ID задач
+    task_map = {}
+    for task in raw:
+        fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
+        matrix_id = fields.get("matrix_id", "").strip()
+        if matrix_id:
+            task_map[matrix_id] = task.get("id")
+
+    # 3. Получаем обновления, удаления и новые элементы
+    updated_result = await detect_updated_items(url)
+    deleted_result = await detect_deleted_items(url)
+    updated_items = updated_result["json"]
+    deleted_items = deleted_result["json"]
+
+    # Добавляем новые элементы (diff)
+    new_items = [
+        {
+            "id": n["id"],
+            "parent_id": n.get("parent_id", ""),
+            "level": n.get("level", 0),  # Сохраняем как число
+            "title": n.get("title", ""),
+            "body": n.get("body", ""),
+        }
+        for n in new_nodes 
+    ]
+    
+    # 4. Обогащаем данные действиями
+    enriched = []
+
+    for item in updated_items:
+        item["task_id"] = task_map.get(item["id"])
+        item["action"] = "update"
+        enriched.append(item)
+    
+    for item in deleted_items:
+        item["task_id"] = task_map.get(item["id"])
+        item["action"] = "delete"
+        enriched.append(item)
+    
+    for item in new_items:
+        # Создаем копию, чтобы не изменять оригинальный элемент
+        new_item = item.copy()
+        new_item["task_id"] = None
+        new_item["action"] = "new"
+        enriched.append(new_item)
+    
+    # 5. Формируем CSV-таблицу всех элементов XMind
+    xmind_df = extract_xmind_nodes(io.BytesIO(content))
+    xmind_df["task_id"] = xmind_df["id"].map(task_map)
+    csv_records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
+    
+    # === 6. Готовим JSON для выгрузки в Pyrus ==================================
+    def build_fields(item):
+        # Преобразуем уровень в строку при формировании полей
+        level_value = str(item.get("level", 0))
+        return [
+            {"id": 1, "value": item.get("id", "")},
+            {"id": 2, "value": level_value},
+            {"id": 3, "value": item.get("title", "")},
+            {"id": 4, "value": item.get("parent_id", "")},
+            {"id": 5, "value": item.get("body", "")},
+        ]
+
+    # Формируем JSON для новых задач (берем из обогащенных данных)
+    json_new = [
+        {
             "method": "POST",
             "endpoint": "/tasks",
             "payload": {
                 "form_id": 2309262,
                 "fields": build_fields(item)
             }
-        } for item in new_items]
-        
-        json_updated = [{
+        }
+        for item in enriched 
+        if item["action"] == "new"
+    ]
+
+    # Формируем JSON для обновлений (берем из обогащенных данных)
+    json_updated = [
+        {
             "method": "POST",
             "endpoint": f"/tasks/{item['task_id']}/comments",
             "payload": {
                 "field_updates": build_fields(item)
             }
-        } for item in updated_items if item.get('task_id')]
-        
-        json_deleted = [{
+        }
+        for item in enriched 
+        if item["action"] == "update" and item.get("task_id")
+    ]
+
+    # Формируем JSON для удалений (берем из обогащенных данных)
+    json_deleted = [
+        {
             "method": "DELETE",
             "endpoint": f"/tasks/{item['task_id']}"
-        } for item in deleted_items if item.get('task_id')]
-        
-        # 6. Формирование CSV данных
-        csv_records = []
-        for item in xmind_records:
-            record = {
-                "id": item["id"],
-                "parent_id": item["parent_id"],
-                "level": item["level"],
-                "title": item["title"],
-                "body": item["body"],
-                "task_id": task_map.get(item["id"])
-            }
-            csv_records.append(record)
-        
-        return {
-            "content": format_as_markdown(enriched),
-            "json": enriched,
-            "rows": csv_records,
-            "for_pyrus": {
-                "new": json_new,
-                "updated": json_updated,
-                "deleted": json_deleted
-            }
         }
-        
-    except Exception as e:
-        return {"error": f"Pyrus mapping error: {str(e)}"}
+        for item in enriched 
+        if item["action"] == "delete" and item.get("task_id")
+    ]
+
+    # Отладочная информация (можете убрать после тестирования)
+    print(f"[DEBUG] Total new nodes: {len(new_nodes)}")
+    print(f"[DEBUG] New items: {len(new_items)}")
+    print(f"[DEBUG] Enriched new items: {len([x for x in enriched if x['action'] == 'new'])}")
+    print(f"[DEBUG] JSON new items: {len(json_new)}")
+
+    return {
+        "content": format_as_markdown(enriched),
+        "json": enriched,
+        "rows": csv_records,
+        "for_pyrus": {
+            "new": json_new,
+            "updated": json_updated,
+            "deleted": json_deleted
+        }
+    }
