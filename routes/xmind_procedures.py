@@ -216,7 +216,7 @@ async def pyrus_mapping(url: str = Body(...)):
     # 1. Скачиваем и парсим XMind
     try:
         content = requests.get(url).content
-        xmind_df = extract_xmind_nodes(io.BytesIO(content))  # уже содержит колонку 'action'
+        xmind_df = extract_xmind_nodes(io.BytesIO(content))
     except Exception as e:
         return {"error": f"Не удалось загрузить XMind: {e}"}
 
@@ -238,11 +238,16 @@ async def pyrus_mapping(url: str = Body(...)):
         if matrix_id:
             task_map[matrix_id] = task.get("id")
 
-    # 4. Обогащаем CSV task_id
+    # 4. Обогащаем CSV task_id и action
     xmind_df["task_id"] = xmind_df["id"].map(task_map)
+    xmind_df["action"] = xmind_df.apply(
+        lambda row: "new" if pd.isna(row["task_id"]) else None,
+        axis=1
+    )
+
     csv_records = xmind_df.to_dict(orient="records")
 
-    # 5. Формируем enriched-список (все действия, размеченные через action в CSV)
+    # 5. Формируем enriched-список
     enriched = []
     for row in csv_records:
         enriched.append({
@@ -297,7 +302,6 @@ async def pyrus_mapping(url: str = Body(...)):
         for item in enriched if item["action"] == "delete" and item.get("task_id")
     ]
 
-    # 8. Возврат результата
     return {
         "content": format_as_markdown(enriched),
         "json": enriched,
