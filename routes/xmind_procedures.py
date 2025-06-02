@@ -193,7 +193,7 @@ async def pyrus_mapping(url: str = Body(...)):
         if isinstance(raw, dict):
             raw = raw.get("tasks", [])
     except Exception as e:
-        return {"error": f"Не удалось загрузить JSON из Pyrus: {e}")
+        return {"error": f"Не удалось загрузить JSON из Pyrus: {e}"}
 
     # Строим маппинг ID задач
     task_map = {}
