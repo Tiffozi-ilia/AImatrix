@@ -246,43 +246,35 @@ async def pyrus_mapping(url: str = Body(...)):
     deleted_result = await detect_deleted_items(url)
     updated_items = updated_result["json"]
     deleted_items = deleted_result["json"]
-    
-    # Добавляем новые элементы (diff)
-    new_items = [
-        {
-            "id": n["id"],
-            "parent_id": n.get("parent_id", ""),
-            "level": str(n.get("level", 0)),
-            "title": n.get("title", ""),
-            "body": n.get("body", ""),
-        }
-        for n in new_nodes 
-    ]
+
 
     # 4. Обогащаем данные действиями
-    enriched = []
     for item in updated_items:
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "update"
         enriched.append(item)
-        
+    
     for item in deleted_items:
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "delete"
         enriched.append(item)
-        
-    for item in new_items:
-        item["task_id"] = None  # Для новых элементов task_id всегда пустой
-        item["action"] = "new"
-        enriched.append(item)
+    
+    # Новые элементы = всё из xmind, что не встречается в task_map
+    existing_ids = set(task_map.keys())
+    for node in flat_xmind:
+        node_id = str(node.get("id", "")).strip()
+        if node_id and node_id not in existing_ids:
+            enriched.append({
+                "id": node_id,
+                "parent_id": node.get("parent_id", ""),
+                "level": str(node.get("level", 0)),
+                "title": node.get("title", ""),
+                "body": node.get("body", ""),
+                "task_id": None,
+                "action": "new"
+            })
 
-    # 5. Формируем CSV-таблицу всех элементов XMind
-    xmind_df = extract_xmind_nodes(io.BytesIO(content))
-    xmind_df["task_id"] = xmind_df["id"].map(task_map)
-    csv_records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
-
-
-    # === 6. Готовим JSON для выгрузки в Pyrus ==================================
+       # === 6. Готовим JSON для выгрузки в Pyrus ==================================
 
     def build_fields(item):
         return [
