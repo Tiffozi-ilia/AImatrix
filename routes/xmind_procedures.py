@@ -203,7 +203,6 @@ async def detect_deleted_items(url: str = Body(...)):
 # ... предыдущий код без изменений ...
 
 # === MAPPING (Stage 1: только CSV из JSON) ====================================
-# === MAPPING (Stage 1: только CSV из JSON) ====================================
 @router.post("/pyrus_mapping")
 async def pyrus_mapping(url: str = Body(...)):
     import requests
@@ -220,6 +219,10 @@ async def pyrus_mapping(url: str = Body(...)):
     except Exception as e:
         return {"error": f"Не удалось загрузить XMind: {e}"}
 
+    # Используем flatten_xmind_nodes для получения новых элементов
+    flat_xmind = flatten_xmind_nodes(content_json)
+    new_nodes = [n for n in flat_xmind if n.get("generated")]
+
     # 2. Загружаем данные из Pyrus
     try:
         raw = get_data()
@@ -230,27 +233,22 @@ async def pyrus_mapping(url: str = Body(...)):
     except Exception as e:
         return {"error": f"Не удалось загрузить JSON из Pyrus: {e}"}
 
-    # 3. Строим маппинг ID задач
+    # Строим маппинг ID задач
     task_map = {}
-    pyrus_ids = set()
     for task in raw:
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
         matrix_id = fields.get("matrix_id", "").strip()
         if matrix_id:
-            pyrus_ids.add(matrix_id)
             task_map[matrix_id] = task.get("id")
 
-    # 4. Разворачиваем XMind и фильтруем реально новые (независимо от generated)
-    flat_xmind = flatten_xmind_nodes(content_json)
-    new_nodes = [n for n in flat_xmind if str(n.get("id", "")).strip() not in pyrus_ids]
-
-    # 5. Получаем обновления и удаления
+    # 3. Получаем обновления, удаления и новые элементы
     updated_result = await detect_updated_items(url)
     deleted_result = await detect_deleted_items(url)
     updated_items = updated_result["json"]
     deleted_items = deleted_result["json"]
 
-    # 6. Добавляем новые элементы
+
+# Добавляем новые элементы (diff)
     new_items = [
         {
             "id": n["id"],
@@ -259,28 +257,33 @@ async def pyrus_mapping(url: str = Body(...)):
             "title": n.get("title", ""),
             "body": n.get("body", ""),
         }
-        for n in new_nodes
+        for n in new_nodes 
     ]
+    
+    # 4. Обогащаем данные действиями
 
-    # 7. Обогащаем всеми действиями
     enriched = []
 
     for item in updated_items:
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "update"
         enriched.append(item)
-
+    
     for item in deleted_items:
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "delete"
         enriched.append(item)
-
+    
     for item in new_items:
         item["task_id"] = None
         item["action"] = "new"
         enriched.append(item)
+    # 5. Формируем CSV-таблицу всех элементов XMind
+    xmind_df = extract_xmind_nodes(io.BytesIO(content))
+    xmind_df["task_id"] = xmind_df["id"].map(task_map)
+    csv_records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
+       # === 6. Готовим JSON для выгрузки в Pyrus ==================================
 
-    # 8. Формируем JSON для выгрузки в Pyrus
     def build_fields(item):
         return [
             {"id": 1, "value": item["id"]},
@@ -288,7 +291,7 @@ async def pyrus_mapping(url: str = Body(...)):
             {"id": 3, "value": item["title"]},
             {"id": 4, "value": item["parent_id"]},
             {"id": 5, "value": item["body"]},
-        ]
+                    ]
 
     json_new = [
         {
@@ -321,12 +324,6 @@ async def pyrus_mapping(url: str = Body(...)):
         for item in deleted_items if item.get("task_id")
     ]
 
-    # 9. CSV-таблица всех XMind-элементов
-    xmind_df = extract_xmind_nodes(io.BytesIO(content))
-    xmind_df["task_id"] = xmind_df["id"].map(task_map)
-    csv_records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
-
-    # 10. Финальный возврат
     return {
         "content": format_as_markdown(enriched),
         "json": enriched,
@@ -337,4 +334,3 @@ async def pyrus_mapping(url: str = Body(...)):
             "deleted": json_deleted
         }
     }
-
