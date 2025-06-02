@@ -244,21 +244,22 @@ async def pyrus_mapping(url: str = Body(...)):
     deleted_items = deleted_result["json"]
 
     # Добавляем новые элементы (diff)
-       new_items = [
-        {
-            "id": node["id"],
-            "parent_id": node.get("parent_id", ""),
-            "level": node.get("level", 0),
-            "title": node.get("title", ""),
-            "body": node.get("body", ""),
-            "task_id": None,
-            "action": "new"
-        }
-        for node in flat_xmind
-        if node["id"] not in task_map
-    ]
+    flat_xmind = flatten_xmind_nodes(content_json)
 
-    
+new_items = [
+    {
+        "id": node["id"],
+        "parent_id": node.get("parent_id", ""),
+        "level": node.get("level", 0),
+        "title": node.get("title", ""),
+        "body": node.get("body", ""),
+        "task_id": None,
+        "action": "new"
+    }
+    for node in flat_xmind
+    if node["id"] not in task_map
+]
+
     # 4. Обогащаем данные действиями
     enriched = []
 
