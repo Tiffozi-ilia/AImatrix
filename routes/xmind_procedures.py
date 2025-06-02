@@ -210,7 +210,6 @@ async def pyrus_mapping(url: str = Body(...)):
     import pandas as pd
 
     from utils.data_loader import get_data
-    from utils.xmind_parser import extract_xmind_nodes
     from utils.diff_engine import format_as_markdown
 
     # 1. Скачиваем и парсим XMind
