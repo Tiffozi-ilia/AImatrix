@@ -203,6 +203,7 @@ async def detect_deleted_items(url: str = Body(...)):
 # ... предыдущий код без изменений ...
 
 # === MAPPING (Stage 1: только CSV из JSON) ====================================
+# === MAPPING (Stage 1: только CSV из JSON) ====================================
 @router.post("/pyrus_mapping")
 async def pyrus_mapping(url: str = Body(...)):
     import requests
@@ -219,10 +220,6 @@ async def pyrus_mapping(url: str = Body(...)):
     except Exception as e:
         return {"error": f"Не удалось загрузить XMind: {e}"}
 
-    # Используем flatten_xmind_nodes для получения новых элементов
-    flat_xmind = flatten_xmind_nodes(content_json)
-    new_nodes = [n for n in flat_xmind if n.get("generated")]
-
     # 2. Загружаем данные из Pyrus
     try:
         raw = get_data()
@@ -235,20 +232,25 @@ async def pyrus_mapping(url: str = Body(...)):
 
     # Строим маппинг ID задач
     task_map = {}
+    pyrus_ids = set()
     for task in raw:
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
         matrix_id = fields.get("matrix_id", "").strip()
         if matrix_id:
+            pyrus_ids.add(matrix_id)
             task_map[matrix_id] = task.get("id")
 
-    # 3. Получаем обновления, удаления и новые элементы
+    # 3. Разворачиваем XMind и фильтруем только реально новые
+    flat_xmind = flatten_xmind_nodes(content_json)
+    new_nodes = [n for n in flat_xmind if n.get("generated") and str(n["id"]) not in pyrus_ids]
+
+    # 4. Получаем обновления и удаления
     updated_result = await detect_updated_items(url)
     deleted_result = await detect_deleted_items(url)
     updated_items = updated_result["json"]
     deleted_items = deleted_result["json"]
 
-
-# Добавляем новые элементы (diff)
+    # 5. Добавляем новые элементы
     new_items = [
         {
             "id": n["id"],
@@ -257,31 +259,91 @@ async def pyrus_mapping(url: str = Body(...)):
             "title": n.get("title", ""),
             "body": n.get("body", ""),
         }
-        for n in new_nodes 
+        for n in new_nodes
     ]
-    
-    # 4. Обогащаем данные действиями
 
+    # 6. Обогащаем всеми действиями
     enriched = []
 
     for item in updated_items:
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "update"
         enriched.append(item)
-    
+
     for item in deleted_items:
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "delete"
         enriched.append(item)
-    
+
     for item in new_items:
         item["task_id"] = None
         item["action"] = "new"
         enriched.append(item)
-    # 5. Формируем CSV-таблицу всех элементов XMind
+
+    # 7. Проверка на пустые поля
+    def build_fields(item):
+        return [
+            {"id": 1, "value": item["id"]},
+            {"id": 2, "value": item["level"]},
+            {"id": 3, "value": item["title"]},
+            {"id": 4, "value": item["parent_id"]},
+            {"id": 5, "value": item["body"]},
+        ]
+
+    for item in enriched:
+        if item["action"] == "new":
+            fields = build_fields(item)
+            if not fields:
+                print("⚠️ EMPTY FIELDS for:", item)
+
+    # 8. Формируем JSON для Pyrus
+    json_new = [
+        {
+            "method": "POST",
+            "endpoint": "/tasks",
+            "payload": {
+                "form_id": 2309262,
+                "fields": build_fields(item)
+            }
+        }
+        for item in enriched if item["action"] == "new"
+    ]
+
+    json_updated = [
+        {
+            "method": "POST",
+            "endpoint": f"/tasks/{item['task_id']}/comments",
+            "payload": {
+                "field_updates": build_fields(item)
+            }
+        }
+        for item in updated_items if item.get("task_id")
+    ]
+
+    json_deleted = [
+        {
+            "method": "DELETE",
+            "endpoint": f"/tasks/{item['task_id']}"
+        }
+        for item in deleted_items if item.get("task_id")
+    ]
+
+    # 9. CSV-таблица всех XMind-элементов
     xmind_df = extract_xmind_nodes(io.BytesIO(content))
     xmind_df["task_id"] = xmind_df["id"].map(task_map)
     csv_records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
+
+    return {
+        "content": format_as_markdown(enriched),
+        "json": enriched,
+        "rows": csv_records,
+        "for_pyrus": {
+            "new": json_new,
+            "updated": json_updated,
+            "deleted": json_deleted
+        }
+    }
+
        # === 6. Готовим JSON для выгрузки в Pyrus ==================================
 
     def build_fields(item):
