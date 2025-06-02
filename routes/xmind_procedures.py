@@ -200,15 +200,6 @@ async def detect_deleted_items(url: str = Body(...)):
     }
 
 # === MAPPING (Stage 1: только CSV из JSON) ====================================
-это точно корректно?
-Всегда показывать подробности
-
-Копировать
-# ✅ Цель: заменить `new_nodes` в pyrus_mapping на корректный набор новых узлов,
-# получаемый из `extract_xmind_nodes`, согласованный с Pyrus по id (csv - источник истины).
-# Также используем ту же логику, что и в detect_updated_items и detect_deleted_items.
-
-# Ниже — исправленная версия pyrus_mapping, без использования flatten_xmind_nodes.
 
 from fastapi import APIRouter, Body
 import zipfile, io, json, requests
