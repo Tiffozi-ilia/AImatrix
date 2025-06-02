@@ -202,13 +202,9 @@ async def detect_deleted_items(url: str = Body(...)):
 # === MAPPING (Stage 1: только CSV из JSON) ====================================
 @router.post("/pyrus_mapping")
 async def pyrus_mapping(url: str = Body(...)):
-    import requests
-    import zipfile
-    import io
-    import json
-    import pandas as pd
+    import requests, zipfile, io, json
 
-    # 1. Скачиваем и парсим XMind
+    # 1. Загружаем и парсим XMind
     try:
         content = requests.get(url).content
         with zipfile.ZipFile(io.BytesIO(content)) as z:
@@ -216,9 +212,7 @@ async def pyrus_mapping(url: str = Body(...)):
     except Exception as e:
         return {"error": f"Не удалось загрузить XMind: {e}"}
 
-    # Используем flatten_xmind_nodes для получения новых элементов
     flat_xmind = flatten_xmind_nodes(content_json)
-    new_nodes = [n for n in flat_xmind if n.get("generated")]
 
     # 2. Загружаем данные из Pyrus
     try:
@@ -230,7 +224,7 @@ async def pyrus_mapping(url: str = Body(...)):
     except Exception as e:
         return {"error": f"Не удалось загрузить JSON из Pyrus: {e}"}
 
-    # Строим маппинг ID задач
+    # Строим маппинг ID → task_id
     task_map = {}
     for task in raw:
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
@@ -238,62 +232,60 @@ async def pyrus_mapping(url: str = Body(...)):
         if matrix_id:
             task_map[matrix_id] = task.get("id")
 
-    # 3. Получаем обновления, удаления и новые элементы
+    # Получаем обновления и удаления
     updated_result = await detect_updated_items(url)
     deleted_result = await detect_deleted_items(url)
     updated_items = updated_result["json"]
     deleted_items = deleted_result["json"]
 
-    # Добавляем новые элементы (diff)
-    new_items = [
-        {
-            "id": n["id"],
-            "parent_id": n.get("parent_id", ""),
-            "level": n.get("level", 0),  # Сохраняем как число
-            "title": n.get("title", ""),
-            "body": n.get("body", ""),
-        }
-        for n in new_nodes 
-    ]
-    
-    # 4. Обогащаем данные действиями
+    # Новые элементы — все, у кого action будет "new"
     enriched = []
 
     for item in updated_items:
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "update"
         enriched.append(item)
-    
+
     for item in deleted_items:
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "delete"
         enriched.append(item)
-    
-    for item in new_items:
-        # Создаем копию, чтобы не изменять оригинальный элемент
-        new_item = item.copy()
-        new_item["task_id"] = None
-        new_item["action"] = "new"
-        enriched.append(new_item)
-    
-    # 5. Формируем CSV-таблицу всех элементов XMind
-    xmind_df = extract_xmind_nodes(io.BytesIO(content))
-    xmind_df["task_id"] = xmind_df["id"].map(task_map)
-    csv_records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
-    
-    # === 6. Готовим JSON для выгрузки в Pyrus ==================================
+
+    for node in flat_xmind:
+        if node["id"] not in task_map:
+            enriched.append({
+                "id": node["id"],
+                "parent_id": node.get("parent_id", ""),
+                "level": node.get("level", 0),
+                "title": node.get("title", ""),
+                "body": node.get("body", ""),
+                "task_id": None,
+                "action": "new"
+            })
+
+    # 5. CSV-запись
+    csv_records = [
+        {
+            "id": node["id"],
+            "parent_id": node.get("parent_id", ""),
+            "level": node.get("level", 0),
+            "title": node.get("title", ""),
+            "body": node.get("body", ""),
+            "task_id": task_map.get(node["id"])
+        }
+        for node in flat_xmind
+    ]
+
+    # 6. Готовим JSON для Pyrus
     def build_fields(item):
-        # Преобразуем уровень в строку при формировании полей
-        level_value = str(item.get("level", 0))
         return [
             {"id": 1, "value": item.get("id", "")},
-            {"id": 2, "value": level_value},
+            {"id": 2, "value": str(item.get("level", ""))},
             {"id": 3, "value": item.get("title", "")},
             {"id": 4, "value": item.get("parent_id", "")},
             {"id": 5, "value": item.get("body", "")},
         ]
 
-    # Формируем JSON для новых задач (берем из обогащенных данных)
     json_new = [
         {
             "method": "POST",
@@ -303,11 +295,9 @@ async def pyrus_mapping(url: str = Body(...)):
                 "fields": build_fields(item)
             }
         }
-        for item in enriched 
-        if item["action"] == "new"
+        for item in enriched if item["action"] == "new"
     ]
 
-    # Формируем JSON для обновлений (берем из обогащенных данных)
     json_updated = [
         {
             "method": "POST",
@@ -316,25 +306,16 @@ async def pyrus_mapping(url: str = Body(...)):
                 "field_updates": build_fields(item)
             }
         }
-        for item in enriched 
-        if item["action"] == "update" and item.get("task_id")
+        for item in enriched if item["action"] == "update" and item.get("task_id")
     ]
 
-    # Формируем JSON для удалений (берем из обогащенных данных)
     json_deleted = [
         {
             "method": "DELETE",
             "endpoint": f"/tasks/{item['task_id']}"
         }
-        for item in enriched 
-        if item["action"] == "delete" and item.get("task_id")
+        for item in enriched if item["action"] == "delete" and item.get("task_id")
     ]
-
-    # Отладочная информация (можете убрать после тестирования)
-    print(f"[DEBUG] Total new nodes: {len(new_nodes)}")
-    print(f"[DEBUG] New items: {len(new_items)}")
-    print(f"[DEBUG] Enriched new items: {len([x for x in enriched if x['action'] == 'new'])}")
-    print(f"[DEBUG] JSON new items: {len(json_new)}")
 
     return {
         "content": format_as_markdown(enriched),
