@@ -7,6 +7,106 @@ from utils.xmind_parser import flatten_xmind_nodes
 
 router = APIRouter()
 
+# === DIFF ======================================================================
+@router.post("/xmind-diff")
+async def xmind_diff(url: str = Body(...)):
+    content = requests.get(url).content
+    with zipfile.ZipFile(io.BytesIO(content)) as z:
+        content_json = json.loads(z.read("content.json"))
+
+    flat_xmind = flatten_xmind_nodes(content_json)
+
+    raw_data = get_data()
+    if isinstance(raw_data, str):
+        try:
+            raw_data = json.loads(raw_data)
+        except json.JSONDecodeError:
+            raw_data = [json.loads(line) for line in raw_data.splitlines() if line.strip()]
+    if isinstance(raw_data, dict):
+        for value in raw_data.values():
+            if isinstance(value, list):
+                raw_data = value
+                break
+    if not isinstance(raw_data, list):
+        raise ValueError("Pyrus data is not a list")
+
+    # Собираем все существующие ID из Pyrus как строки
+    pyrus_ids = {
+        str(item["id"]) for item in raw_data
+        if isinstance(item, dict) and "id" in item
+    }
+
+    # Создаем словарь для отслеживания максимальных номеров для каждого родителя
+    max_numbers = {}
+    all_existing_ids = set(pyrus_ids)
+    
+    # Анализируем существующие ID, чтобы найти максимальные номера
+    for item_id in all_existing_ids:
+        # Проверяем, что ID содержит точку и имеет числовую часть
+        if isinstance(item_id, str) and '.' in item_id:
+            parts = item_id.split('.')
+            # Проверяем, что последняя часть - число
+            if parts[-1].isdigit():
+                base = '.'.join(parts[:-1])
+                number = int(parts[-1])
+                if base not in max_numbers or number > max_numbers[base]:
+                    max_numbers[base] = number
+    
+    # Анализируем ID из XMind, чтобы обновить максимальные номера
+    for node in flat_xmind:
+        node_id = node.get("id")
+        if node_id:
+            # Приводим ID к строке для единообразия
+            node_id_str = str(node_id)
+            if '.' in node_id_str:
+                parts = node_id_str.split('.')
+                if parts[-1].isdigit():
+                    base = '.'.join(parts[:-1])
+                    number = int(parts[-1])
+                    if base not in max_numbers or number > max_numbers[base]:
+                        max_numbers[base] = number
+    
+    used_ids = set(all_existing_ids)
+    new_nodes = []
+    
+    for node in flat_xmind:
+        node_id = node.get("id")
+        parent_id = node.get("parent_id", "")
+        
+        # Приводим ID к строке
+        node_id_str = str(node_id) if node_id else ""
+        
+        # Если ID отсутствует или конфликтует
+        if not node_id_str or node_id_str in used_ids:
+            # Определяем базовый префикс
+            base = str(parent_id) if parent_id else "x"
+            
+            # Получаем текущий максимальный номер для этого базового префикса
+            current_max = max_numbers.get(base, 0)
+            new_number = current_max + 1
+            
+            # Генерируем новый ID
+            new_id = f"{base}.{str(new_number).zfill(2)}"
+            
+            # Обновляем данные узла
+            node["id"] = new_id
+            node["generated"] = True
+            
+            # Обновляем максимальный номер для этого базового префикса
+            max_numbers[base] = new_number
+            used_ids.add(new_id)
+        else:
+            # Если ID валиден, сохраняем его как использованный
+            used_ids.add(node_id_str)
+        
+        # Добавляем в new_nodes если это новый узел
+        if node.get("generated") and node["id"] not in pyrus_ids:
+            new_nodes.append(node)
+
+    return {
+        "content": format_as_markdown(new_nodes),
+        "json": new_nodes
+    }
 # === SHARED PARSERS ============================================================
 def extract_xmind_nodes(file: io.BytesIO):
     with zipfile.ZipFile(file) as z:
@@ -24,7 +124,7 @@ def extract_xmind_nodes(file: io.BytesIO):
                 "title": title.strip(),
                 "body": body.strip(),
                 "level": str(level),
-                "parent_id": parent_id.strip() if parent_id else ""  # Исправлено: пустая строка вместо None
+                "parent_id": parent_id.strip()
             })
         for child in node.get("children", {}).get("attached", []):
             rows.extend(walk(child, node_id, level + 1))
@@ -32,6 +132,7 @@ def extract_xmind_nodes(file: io.BytesIO):
 
     root_topic = content_json[0].get("rootTopic", {})
     return pd.DataFrame(walk(root_topic))
+
 
 def extract_pyrus_data():
     raw = get_data()
@@ -59,84 +160,6 @@ def extract_pyrus_data():
             "parent_id": fields.get("parent_id", "").strip()
         })
     return pd.DataFrame(rows)
-
-# === DIFF ======================================================================
-@router.post("/xmind-diff")
-async def xmind_diff(url: str = Body(...)):
-    content = requests.get(url).content
-    xmind_df = extract_xmind_nodes(io.BytesIO(content))  # Используем единый парсер
-    flat_xmind = xmind_df.to_dict("records")
-
-    raw_data = get_data()
-    if isinstance(raw_data, str):
-        try:
-            raw_data = json.loads(raw_data)
-        except json.JSONDecodeError:
-            raw_data = [json.loads(line) for line in raw_data.splitlines() if line.strip()]
-    if isinstance(raw_data, dict):
-        for value in raw_data.values():
-            if isinstance(value, list):
-                raw_data = value
-                break
-    if not isinstance(raw_data, list):
-        raise ValueError("Pyrus data is not a list")
-
-    pyrus_ids = {
-        str(item["id"]) for item in raw_data
-        if isinstance(item, dict) and "id" in item
-    }
-
-    # Создаем словарь для отслеживания максимальных номеров для каждого родителя
-    max_numbers = {}
-    all_existing_ids = set(pyrus_ids)
-    
-    for item_id in all_existing_ids:
-        if isinstance(item_id, str) and '.' in item_id:
-            parts = item_id.split('.')
-            if parts[-1].isdigit():
-                base = '.'.join(parts[:-1])
-                number = int(parts[-1])
-                if base not in max_numbers or number > max_numbers[base]:
-                    max_numbers[base] = number
-    
-    for node in flat_xmind:
-        node_id = node.get("id")
-        if node_id:
-            node_id_str = str(node_id)
-            if '.' in node_id_str and node_id_str.split('.')[-1].isdigit():
-                base = '.'.join(node_id_str.split('.')[:-1])
-                number = int(node_id_str.split('.')[-1])
-                if base not in max_numbers or number > max_numbers[base]:
-                    max_numbers[base] = number
-    
-    used_ids = set(all_existing_ids)
-    new_nodes = []
-    
-    for node in flat_xmind:
-        node_id = node.get("id")
-        parent_id = node.get("parent_id", "")
-        node_id_str = str(node_id) if node_id else ""
-        
-        if not node_id_str or node_id_str in used_ids:
-            base = str(parent_id) if parent_id else "x"
-            current_max = max_numbers.get(base, 0)
-            new_number = current_max + 1
-            new_id = f"{base}.{str(new_number).zfill(2)}"
-            
-            node["id"] = new_id
-            node["generated"] = True
-            max_numbers[base] = new_number
-            used_ids.add(new_id)
-        else:
-            used_ids.add(node_id_str)
-        
-        if node.get("generated") and node["id"] not in pyrus_ids:
-            new_nodes.append(node)
-
-    return {
-        "content": format_as_markdown(new_nodes),
-        "json": new_nodes
-    }
 
 # === UPDATED ===================================================================
 @router.post("/xmind-updated")
@@ -176,16 +199,28 @@ async def detect_deleted_items(url: str = Body(...)):
         "json": records
     }
 
-# === MAPPING ===================================================================
+# === MAPPING (Stage 1: только CSV из JSON) ====================================
 @router.post("/pyrus_mapping")
 async def pyrus_mapping(url: str = Body(...)):
+    import requests
+    import zipfile
+    import io
+    import json
+    import pandas as pd
+
+    # 1. Скачиваем и парсим XMind
     try:
         content = requests.get(url).content
-        xmind_df = extract_xmind_nodes(io.BytesIO(content))  # Единый источник данных
-        xmind_records = xmind_df.to_dict("records")
+        with zipfile.ZipFile(io.BytesIO(content)) as z:
+            content_json = json.loads(z.read("content.json"))
     except Exception as e:
         return {"error": f"Не удалось загрузить XMind: {e}"}
 
+    # Используем flatten_xmind_nodes для получения новых элементов
+    flat_xmind = flatten_xmind_nodes(content_json)
+    new_nodes = [n for n in flat_xmind if n.get("generated")]
+
+    # 2. Загружаем данные из Pyrus
     try:
         raw = get_data()
         if isinstance(raw, str):
@@ -197,36 +232,33 @@ async def pyrus_mapping(url: str = Body(...)):
 
     # Строим маппинг ID задач
     task_map = {}
-    pyrus_ids = set()
     for task in raw:
         fields = {field["name"]: field.get("value", "") for field in task.get("fields", [])}
         matrix_id = fields.get("matrix_id", "").strip()
         if matrix_id:
             task_map[matrix_id] = task.get("id")
-            pyrus_ids.add(matrix_id)
 
-    # Получаем обновления и удаления
+    # 3. Получаем обновления, удаления и новые элементы
     updated_result = await detect_updated_items(url)
     deleted_result = await detect_deleted_items(url)
     updated_items = updated_result["json"]
     deleted_items = deleted_result["json"]
 
-    # Находим новые элементы (те, что есть в XMind но нет в Pyrus)
+    # Добавляем новые элементы (diff)
     new_items = [
         {
-            "id": item["id"],
-            "parent_id": item["parent_id"],
-            "level": int(item["level"]),  # Конвертируем в int
-            "title": item["title"],
-            "body": item["body"],
+            "id": n["id"],
+            "parent_id": n.get("parent_id", ""),
+            "level": n.get("level", 0),  # Сохраняем как число
+            "title": n.get("title", ""),
+            "body": n.get("body", ""),
         }
-        for item in xmind_records
-        if item["id"] not in pyrus_ids
+        for n in new_nodes 
     ]
-
-    # Обогащаем данные
-    enriched = []
     
+    # 4. Обогащаем данные действиями
+    enriched = []
+
     for item in updated_items:
         item["task_id"] = task_map.get(item["id"])
         item["action"] = "update"
@@ -238,25 +270,30 @@ async def pyrus_mapping(url: str = Body(...)):
         enriched.append(item)
     
     for item in new_items:
+        # Создаем копию, чтобы не изменять оригинальный элемент
         new_item = item.copy()
         new_item["task_id"] = None
         new_item["action"] = "new"
         enriched.append(new_item)
     
-    # Формируем CSV
+    # 5. Формируем CSV-таблицу всех элементов XMind
+    xmind_df = extract_xmind_nodes(io.BytesIO(content))
     xmind_df["task_id"] = xmind_df["id"].map(task_map)
     csv_records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
-
-    # Формируем JSON для Pyrus
+    
+    # === 6. Готовим JSON для выгрузки в Pyrus ==================================
     def build_fields(item):
+        # Преобразуем уровень в строку при формировании полей
+        level_value = str(item.get("level", 0))
         return [
             {"id": 1, "value": item.get("id", "")},
-            {"id": 2, "value": str(item.get("level", 0))},
+            {"id": 2, "value": level_value},
             {"id": 3, "value": item.get("title", "")},
             {"id": 4, "value": item.get("parent_id", "")},
             {"id": 5, "value": item.get("body", "")},
         ]
 
+    # Формируем JSON для новых задач (берем из обогащенных данных)
     json_new = [
         {
             "method": "POST",
@@ -270,6 +307,7 @@ async def pyrus_mapping(url: str = Body(...)):
         if item["action"] == "new"
     ]
 
+    # Формируем JSON для обновлений (берем из обогащенных данных)
     json_updated = [
         {
             "method": "POST",
@@ -282,6 +320,7 @@ async def pyrus_mapping(url: str = Body(...)):
         if item["action"] == "update" and item.get("task_id")
     ]
 
+    # Формируем JSON для удалений (берем из обогащенных данных)
     json_deleted = [
         {
             "method": "DELETE",
@@ -290,6 +329,12 @@ async def pyrus_mapping(url: str = Body(...)):
         for item in enriched 
         if item["action"] == "delete" and item.get("task_id")
     ]
+
+    # Отладочная информация (можете убрать после тестирования)
+    print(f"[DEBUG] Total new nodes: {len(new_nodes)}")
+    print(f"[DEBUG] New items: {len(new_items)}")
+    print(f"[DEBUG] Enriched new items: {len([x for x in enriched if x['action'] == 'new'])}")
+    print(f"[DEBUG] JSON new items: {len(json_new)}")
 
     return {
         "content": format_as_markdown(enriched),
