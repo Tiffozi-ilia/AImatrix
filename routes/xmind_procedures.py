@@ -200,8 +200,6 @@ async def detect_deleted_items(url: str = Body(...)):
     }
 
 # === MAPPING (Stage 1: только CSV из JSON) ====================================
-# ... предыдущий код без изменений ...
-
 # === MAPPING (Stage 1: только CSV из JSON) ====================================
 @router.post("/pyrus_mapping")
 async def pyrus_mapping(url: str = Body(...)):
@@ -247,13 +245,12 @@ async def pyrus_mapping(url: str = Body(...)):
     updated_items = updated_result["json"]
     deleted_items = deleted_result["json"]
 
-
-# Добавляем новые элементы (diff)
+    # Добавляем новые элементы (diff)
     new_items = [
         {
             "id": n["id"],
             "parent_id": n.get("parent_id", ""),
-            "level": str(n.get("level", 0)),
+            "level": n.get("level", 0),  # Сохраняем как число
             "title": n.get("title", ""),
             "body": n.get("body", ""),
         }
@@ -261,7 +258,6 @@ async def pyrus_mapping(url: str = Body(...)):
     ]
     
     # 4. Обогащаем данные действиями
-
     enriched = []
 
     for item in updated_items:
@@ -275,24 +271,30 @@ async def pyrus_mapping(url: str = Body(...)):
         enriched.append(item)
     
     for item in new_items:
-        item["task_id"] = None
-        item["action"] = "new"
-        enriched.append(item)
+        # Создаем копию, чтобы не изменять оригинальный элемент
+        new_item = item.copy()
+        new_item["task_id"] = None
+        new_item["action"] = "new"
+        enriched.append(new_item)
+    
     # 5. Формируем CSV-таблицу всех элементов XMind
     xmind_df = extract_xmind_nodes(io.BytesIO(content))
     xmind_df["task_id"] = xmind_df["id"].map(task_map)
     csv_records = xmind_df[["id", "parent_id", "level", "title", "body", "task_id"]].to_dict(orient="records")
-       # === 6. Готовим JSON для выгрузки в Pyrus ==================================
-
+    
+    # === 6. Готовим JSON для выгрузки в Pyrus ==================================
     def build_fields(item):
+        # Преобразуем уровень в строку при формировании полей
+        level_value = str(item.get("level", 0))
         return [
-            {"id": 1, "value": item["id"]},
-            {"id": 2, "value": item["level"]},
-            {"id": 3, "value": item["title"]},
-            {"id": 4, "value": item["parent_id"]},
-            {"id": 5, "value": item["body"]},
-                    ]
+            {"id": 1, "value": item.get("id", "")},
+            {"id": 2, "value": level_value},
+            {"id": 3, "value": item.get("title", "")},
+            {"id": 4, "value": item.get("parent_id", "")},
+            {"id": 5, "value": item.get("body", "")},
+        ]
 
+    # Формируем JSON для новых задач (берем из обогащенных данных)
     json_new = [
         {
             "method": "POST",
@@ -302,9 +304,11 @@ async def pyrus_mapping(url: str = Body(...)):
                 "fields": build_fields(item)
             }
         }
-        for item in enriched if item["action"] == "new"
+        for item in enriched 
+        if item["action"] == "new"
     ]
 
+    # Формируем JSON для обновлений (берем из обогащенных данных)
     json_updated = [
         {
             "method": "POST",
@@ -313,16 +317,25 @@ async def pyrus_mapping(url: str = Body(...)):
                 "field_updates": build_fields(item)
             }
         }
-        for item in updated_items if item.get("task_id")
+        for item in enriched 
+        if item["action"] == "update" and item.get("task_id")
     ]
 
+    # Формируем JSON для удалений (берем из обогащенных данных)
     json_deleted = [
         {
             "method": "DELETE",
             "endpoint": f"/tasks/{item['task_id']}"
         }
-        for item in deleted_items if item.get("task_id")
+        for item in enriched 
+        if item["action"] == "delete" and item.get("task_id")
     ]
+
+    # Отладочная информация (можете убрать после тестирования)
+    print(f"[DEBUG] Total new nodes: {len(new_nodes)}")
+    print(f"[DEBUG] New items: {len(new_items)}")
+    print(f"[DEBUG] Enriched new items: {len([x for x in enriched if x['action'] == 'new'])}")
+    print(f"[DEBUG] JSON new items: {len(json_new)}")
 
     return {
         "content": format_as_markdown(enriched),
