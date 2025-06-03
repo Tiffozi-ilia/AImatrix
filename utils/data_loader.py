@@ -66,7 +66,7 @@ def build_df_from_api():
             "child_id": extract(fields, "child_id")
         })
     return pd.DataFrame(rows)
-№------------------------------API---------------------------------------------------------
+#------------------------------API---------------------------------------------------------
 from fastapi import APIRouter, Body
 from fastapi.responses import JSONResponse
 from utils.data_loader import get_pyrus_token
