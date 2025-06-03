@@ -66,7 +66,7 @@ def build_df_from_api():
             "child_id": extract(fields, "child_id")
         })
     return pd.DataFrame(rows)
-#------------------------------API---------------------------------------------------------
+# ------------------------------API---------------------------------------------------------
 from fastapi import APIRouter, Body
 from fastapi.responses import JSONResponse
 from utils.data_loader import get_pyrus_token
@@ -83,7 +83,6 @@ async def apply_to_pyrus(url: str = Body(...)):
         "Content-Type": "application/json"
     }
 
-    # Получаем JSON для отправки
     mapping_result = await pyrus_mapping(url)
     if "error" in mapping_result:
         return JSONResponse(status_code=400, content={"error": mapping_result["error"]})
@@ -92,7 +91,6 @@ async def apply_to_pyrus(url: str = Body(...)):
     results = {"new": [], "updated": [], "deleted": []}
     summary = {"new": 0, "updated": 0, "deleted": 0, "errors": 0}
 
-    # Обработка всех категорий: new, updated, deleted
     for section in ["new", "updated", "deleted"]:
         for item in for_pyrus.get(section, []):
             method = item.get("method", "POST")
@@ -138,4 +136,3 @@ async def apply_to_pyrus(url: str = Body(...)):
         "summary": summary,
         "results": results
     }
-
