@@ -70,7 +70,7 @@ def build_df_from_api():
 from fastapi import APIRouter, Body
 from fastapi.responses import JSONResponse
 from utils.data_loader import get_pyrus_token
-from xmind_procedures import pyrus_mapping  # убедись, что импортируется корректно
+from routes.xmind_procedures import pyrus_mapping
 import requests
 
 router = APIRouter()
