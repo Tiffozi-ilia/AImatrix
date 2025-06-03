@@ -66,3 +66,76 @@ def build_df_from_api():
             "child_id": extract(fields, "child_id")
         })
     return pd.DataFrame(rows)
+№------------------------------API---------------------------------------------------------
+from fastapi import APIRouter, Body
+from fastapi.responses import JSONResponse
+from utils.data_loader import get_pyrus_token
+from xmind_procedures import pyrus_mapping  # убедись, что импортируется корректно
+import requests
+
+router = APIRouter()
+
+@router.post("/apply-to-pyrus")
+async def apply_to_pyrus(url: str = Body(...)):
+    token = get_pyrus_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    # Получаем JSON для отправки
+    mapping_result = await pyrus_mapping(url)
+    if "error" in mapping_result:
+        return JSONResponse(status_code=400, content={"error": mapping_result["error"]})
+
+    for_pyrus = mapping_result.get("for_pyrus", {})
+    results = {"new": [], "updated": [], "deleted": []}
+    summary = {"new": 0, "updated": 0, "deleted": 0, "errors": 0}
+
+    # Обработка всех категорий: new, updated, deleted
+    for section in ["new", "updated", "deleted"]:
+        for item in for_pyrus.get(section, []):
+            method = item.get("method", "POST")
+            endpoint = item.get("endpoint")
+            payload = item.get("payload", None)
+            url_full = f"https://api.pyrus.com/v4{endpoint}"
+
+            try:
+                if method == "POST":
+                    resp = requests.post(url_full, headers=headers, json=payload)
+                elif method == "DELETE":
+                    resp = requests.delete(url_full, headers=headers)
+                else:
+                    raise Exception(f"Unsupported method: {method}")
+
+                result_entry = {
+                    "status": resp.status_code,
+                    "endpoint": endpoint,
+                    "method": method,
+                    "response": resp.json() if resp.content else {},
+                }
+                if payload:
+                    result_entry["payload"] = payload
+
+                results[section].append(result_entry)
+
+                if resp.status_code == 200:
+                    summary[section] += 1
+                else:
+                    summary["errors"] += 1
+
+            except Exception as e:
+                results[section].append({
+                    "status": "error",
+                    "method": method,
+                    "endpoint": endpoint,
+                    "error": str(e),
+                    "payload": payload
+                })
+                summary["errors"] += 1
+
+    return {
+        "summary": summary,
+        "results": results
+    }
+
