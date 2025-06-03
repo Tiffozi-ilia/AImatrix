@@ -67,72 +67,90 @@ def build_df_from_api():
         })
     return pd.DataFrame(rows)
 # ------------------------------API---------------------------------------------------------
-from fastapi import APIRouter, Body
-from fastapi.responses import JSONResponse
-from utils.data_loader import get_pyrus_token
-from routes.xmind_procedures import pyrus_mapping
-import requests
-
-router = APIRouter()
-
 @router.post("/apply-to-pyrus")
-async def apply_to_pyrus(url: str = Body(...)):
-    token = get_pyrus_token()
+async def apply_to_pyrus(mapping_data: dict = Body(...)):
+    from fastapi.responses import JSONResponse
+    import requests
+    import logging
+
+    # Настройка логирования
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    try:
+        token = get_pyrus_token()
+    except Exception as e:
+        logger.error(f"Ошибка получения токена Pyrus: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Ошибка аутентификации в Pyrus: {str(e)}"}
+        )
+
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
 
-    mapping_result = await pyrus_mapping(url)
-    if "error" in mapping_result:
-        return JSONResponse(status_code=400, content={"error": mapping_result["error"]})
-
-    for_pyrus = mapping_result.get("for_pyrus", {})
     results = {"new": [], "updated": [], "deleted": []}
-    summary = {"new": 0, "updated": 0, "deleted": 0, "errors": 0}
+    error_count = 0
 
-    for section in ["new", "updated", "deleted"]:
-        for item in for_pyrus.get(section, []):
-            method = item.get("method", "POST")
-            endpoint = item.get("endpoint")
-            payload = item.get("payload", None)
-            url_full = f"https://api.pyrus.com/v4{endpoint}"
+    # Обработка новых задач
+    for item in mapping_data.get("new", []):
+        try:
+            endpoint = f"https://api.pyrus.com/v4{item['endpoint']}"
+            resp = requests.post(endpoint, headers=headers, json=item["payload"])
+            resp.raise_for_status()
+            results["new"].append({
+                "id": item["payload"]["fields"][0]["value"],
+                "status": resp.status_code,
+                "task_id": resp.json().get("task_id", "N/A")
+            })
+        except Exception as e:
+            error_count += 1
+            logger.error(f"Ошибка создания задачи: {str(e)}")
+            results["new"].append({
+                "error": str(e),
+                "payload": item["payload"]
+            })
 
-            try:
-                if method == "POST":
-                    resp = requests.post(url_full, headers=headers, json=payload)
-                elif method == "DELETE":
-                    resp = requests.delete(url_full, headers=headers)
-                else:
-                    raise Exception(f"Unsupported method: {method}")
+    # Обработка обновлений
+    for item in mapping_data.get("updated", []):
+        try:
+            endpoint = f"https://api.pyrus.com/v4{item['endpoint']}"
+            resp = requests.post(endpoint, headers=headers, json=item["payload"])
+            resp.raise_for_status()
+            results["updated"].append({
+                "id": item["endpoint"].split("/")[2],
+                "status": resp.status_code
+            })
+        except Exception as e:
+            error_count += 1
+            logger.error(f"Ошибка обновления задачи: {str(e)}")
+            results["updated"].append({
+                "error": str(e),
+                "payload": item["payload"]
+            })
 
-                result_entry = {
-                    "status": resp.status_code,
-                    "endpoint": endpoint,
-                    "method": method,
-                    "response": resp.json() if resp.content else {},
-                }
-                if payload:
-                    result_entry["payload"] = payload
-
-                results[section].append(result_entry)
-
-                if resp.status_code == 200:
-                    summary[section] += 1
-                else:
-                    summary["errors"] += 1
-
-            except Exception as e:
-                results[section].append({
-                    "status": "error",
-                    "method": method,
-                    "endpoint": endpoint,
-                    "error": str(e),
-                    "payload": payload
-                })
-                summary["errors"] += 1
+    # Обработка удалений
+    for item in mapping_data.get("deleted", []):
+        try:
+            endpoint = f"https://api.pyrus.com/v4{item['endpoint']}"
+            resp = requests.delete(endpoint, headers=headers)
+            resp.raise_for_status()
+            results["deleted"].append({
+                "id": item["endpoint"].split("/")[2],
+                "status": resp.status_code
+            })
+        except Exception as e:
+            error_count += 1
+            logger.error(f"Ошибка удаления задачи: {str(e)}")
+            results["deleted"].append({
+                "error": str(e),
+                "endpoint": item["endpoint"]
+            })
 
     return {
-        "summary": summary,
-        "results": results
+        "results": results,
+        "success_count": sum(len(v) for v in results.values()) - error_count,
+        "error_count": error_count
     }
