@@ -67,6 +67,7 @@ def build_df_from_api():
         })
     return pd.DataFrame(rows)
 # ------------------------------API---------------------------------------------------------
+
 @router.post("/apply-to-pyrus")
 async def apply_to_pyrus(mapping_data: dict = Body(...)):
     from fastapi.responses import JSONResponse
