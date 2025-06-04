@@ -11,7 +11,7 @@ async def call_pyrus_update(url: str = Body(..., embed=True)):
         # Используем переданный URL XMind-файла
         xmind_url = url
         headers = {"Content-Type": "application/json"}
-        payload = json.dumps({"url": xmind_url})  # Исправлено формирование payload
+        payload = json.dumps({"url": "https://raw.githubusercontent.com/Tiffozi-ilia/AImatrix/a1d715342d884e910e8e9a76a3b05307ef8a2451/testAPIfinal.xmind"})  # Исправлено формирование payload
 
         base = "https://aimatrix-e8zs.onrender.com"  # Ваш базовый URL
 
