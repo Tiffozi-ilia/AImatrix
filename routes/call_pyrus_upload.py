@@ -8,7 +8,7 @@ router = APIRouter()
 class UploadInput(BaseModel):
     xmind_url: str
 
-@app.post("/call_pyrus_upload")
+@router.post("/call_pyrus_upload")
 async def call_pyrus_upload(payload: UploadInput):
     api_url = "https://aimatrix-e8zs.onrender.com/pyrus_mapping"
     headers = {"Content-Type": "application/json"}
