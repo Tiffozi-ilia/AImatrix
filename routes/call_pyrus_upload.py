@@ -19,7 +19,7 @@ async def call_pyrus_upload(url: str = Body(..., embed=True)):
             "DIFF": f"{base}/xmind-diff",
             "UPDATED": f"{base}/xmind-updated",
             "DELETED": f"{base}/xmind-delete",
-            "MAPPING": f"{base}/xmind_procedures/pyrus_mapping"  # Исправленный путь
+            "MAPPING": f"{base}/pyrus_mapping"  # Исправленный путь
         }
 
         results = {}
