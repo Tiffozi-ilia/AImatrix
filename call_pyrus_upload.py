@@ -3,7 +3,7 @@ import json
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-app = FastAPI()
+router = APIRouter()
 
 class UploadInput(BaseModel):
     xmind_url: str
