@@ -66,4 +66,45 @@ def build_df_from_api():
             "child_id": extract(fields, "child_id")
         })
     return pd.DataFrame(rows)
+
 # ------------------------------API---------------------------------------------------------
+
+def send_to_pyrus(method: str, endpoint: str, payload: dict = None):
+    base_url = "https://api.pyrus.com/v4"
+    token = get_pyrus_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+
+    url = f"{base_url}{endpoint}"
+
+    if method.upper() == "POST":
+        response = requests.post(url, headers=headers, json=payload)
+    elif method.upper() == "DELETE":
+        response = requests.delete(url, headers=headers)
+    else:
+        raise ValueError(f"Unsupported method: {method}")
+
+    try:
+        response.raise_for_status()
+        return response.json()
+    except requests.HTTPError as e:
+        return {"error": str(e), "details": response.text}
+
+def sync_with_pyrus(data):
+    results = {"created": [], "updated": [], "deleted": [], "errors": []}
+
+    for item in data["for_pyrus"]["new"]:
+        resp = send_to_pyrus(item["method"], item["endpoint"], item["payload"])
+        results["created"].append(resp)
+
+    for item in data["for_pyrus"]["updated"]:
+        resp = send_to_pyrus(item["method"], item["endpoint"], item["payload"])
+        results["updated"].append(resp)
+
+    for item in data["for_pyrus"]["deleted"]:
+        resp = send_to_pyrus(item["method"], item["endpoint"])
+        results["deleted"].append(resp)
+
+    return results
