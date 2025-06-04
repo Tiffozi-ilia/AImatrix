@@ -12,7 +12,7 @@ async def call_pyrus_upload(url: str = Body(..., embed=True)):
         # Используем переданный URL XMind-файла
         xmind_url = url
         headers = {"Content-Type": "application/json"}
-        payload = json.dumps({"url": xmind_url})  # Исправлено формирование payload
+        payload = json.dumps(xmind_url)  # Исправлено формирование payload
 
         base = "https://aimatrix-e8zs.onrender.com"  # Ваш базовый URL
 
