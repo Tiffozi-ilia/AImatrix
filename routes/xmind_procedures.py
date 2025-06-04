@@ -400,36 +400,3 @@ async def sync_with_pyrus(data):
         results["deleted"].append(resp)
 
     return results
-
-# В конец файла xmind_procedures.py добавьте:
-
-@router.post("/sync")
-async def xmind_sync(url: str = Body(..., embed=True)):
-    """
-    Обертка для запуска полной процедуры синхронизации
-    Возвращает упрощенный ответ для внешних вызовов
-    """
-    # Вызываем основную процедуру
-    result = await pyrus_mapping(url=url)
-    
-    # Формируем упрощенный ответ
-    response = {
-        "status": "success",
-        "summary": {
-            "new": len(result.get("for_pyrus", {}).get("new", [])),
-            "updated": len(result.get("for_pyrus", {}).get("updated", [])),
-            "deleted": len(result.get("for_pyrus", {}).get("deleted", [])),
-            "errors": len(result.get("pyrus_response", {}).get("errors", []))
-        },
-        "preview": result.get("content", "")[:1000] + "..." if result.get("content") else "",
-        "details": {
-            "pyrus_response": result.get("pyrus_response"),
-            "full_data_available": bool(result.get("json"))
-        }
-    }
-    
-    # Добавляем полные данные если они небольшие
-    if result.get("json") and len(str(result["json"])) < 2000:
-        response["full_data"] = result["json"]
-    
-    return response
