@@ -5,7 +5,7 @@ from fastapi import APIRouter, Body, HTTPException
 router = APIRouter()
 
 @router.post("/call-pyrus-upload")
-async def call_pyrus_update(url: str = Body(..., embed=True)):
+async def call_pyrus_upload(url: str = Body(..., embed=True)):
     """Точная копия вашего скрипта для вызова через Dify"""
     try:
         # Используем переданный URL XMind-файла
