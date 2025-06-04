@@ -6,6 +6,7 @@ router = APIRouter()
 
 @router.post("/call-pyrus-upload")
 async def call_pyrus_upload(url: str = Body(..., embed=True)):
+    print("🔥 Вызов получен:", url)
     """Точная копия вашего скрипта для вызова через Dify"""
     try:
         # Используем переданный URL XMind-файла
