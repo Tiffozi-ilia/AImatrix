@@ -3,7 +3,7 @@ import requests
 from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 
-app = FastAPI()
+router = APIRouter()
 
 @app.get("/call-pyrus-upload", response_class=PlainTextResponse)
 def run_script():
