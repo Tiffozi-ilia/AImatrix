@@ -7,7 +7,7 @@ router = APIRouter()
 
 @router.get("/call-pyrus-upload", response_class=PlainTextResponse)
 def run_script():
-    xmind_url = "https://raw.githubusercontent.com/Tiffozi-ilia/AImatrix/a1d715342d884e910e8e9a76a3b05307ef8a2451/testAPIfinal.xmind"
+    xmind_url = "https://raw.githubusercontent.com/Tiffozi-ilia/AImatrix/all-in/matrix.xmind"
     headers = {"Content-Type": "application/json"}
     payload = json.dumps(xmind_url)
 
