@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routes import json_export, md_full, md_clean, zip_export, csv_export, excel_export, opml_export, mm_export, xmind_export, pyrus_upload, xmind_procedures
+from routes import json_export, md_full, md_clean, md_clean_cut, zip_export, csv_export, excel_export, opml_export, mm_export, xmind_export, pyrus_upload, xmind_procedures
 from routes.call_pyrus_upload import router as call_pyrus_upload_router
 
 app = FastAPI()
@@ -7,6 +7,7 @@ app = FastAPI()
 app.include_router(json_export.router)
 app.include_router(md_full.router)
 app.include_router(md_clean.router)
+app.include_router(md_clean_cut.router)
 app.include_router(zip_export.router)
 app.include_router(csv_export.router)
 app.include_router(excel_export.router)
