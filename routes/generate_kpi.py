@@ -1,20 +1,18 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import FileResponse
 import pandas as pd
 import openpyxl
 from openpyxl.styles import Font
 from copy import copy
-import os
 
 router = APIRouter()
 
 @router.get("/generate_kpi")
-def generate_kpi_report():
-    # === НАСТРОЙКИ ===
-    X = 2025
-    Y = 1
+def generate_kpi_report(
+    year: int = Query(..., alias="year", description="Год, например 2025"),
+    quarter: int = Query(..., ge=1, le=4, alias="quarter", description="Квартал: 1–4")
+):
     quarters = {1: '1Q', 2: '2Q', 3: '3Q', 4: '4Q'}
-
     report_df = pd.read_excel("KPI.xlsx", skiprows=6)
     template_wb = openpyxl.load_workbook("EtalonKPI.xlsx")
     template_sheet = template_wb.active
@@ -95,9 +93,9 @@ def generate_kpi_report():
                        "главный бизнес-аналитик", "ведущий бизнес-аналитик", "бизнес-аналитик"]
 
     filtered_df = report_df[(report_df.iloc[:, 2] == "Работает") &
-                            (report_df.iloc[:, 6] == X) &
-                            (report_df.iloc[:, 7] == quarters[Y]) &
-                            (report_df.iloc[:, 5].apply(lambda d: is_full_quarter(d, X, Y)))]
+                            (report_df.iloc[:, 6] == year) &
+                            (report_df.iloc[:, 7] == quarters[quarter]) &
+                            (report_df.iloc[:, 5].apply(lambda d: is_full_quarter(d, year, quarter)))]
 
     filtered_df["division_rank"] = filtered_df.iloc[:, 3].apply(lambda x: 0 if x == "Управление" else 1)
     filtered_df["position_rank"] = filtered_df.iloc[:, 4].apply(
@@ -109,10 +107,10 @@ def generate_kpi_report():
     for name in df_final.iloc[:, 1].unique():
         new_sheet = template_wb.copy_worksheet(template_sheet)
         new_sheet.title = name[:31]
-        new_sheet["B1"] = f"Личная карточка индикаторов ({X})"
-        new_sheet["B2"] = f"{Y} квартал {X}"
+        new_sheet["B1"] = f"Личная карточка индикаторов ({year})"
+        new_sheet["B2"] = f"{quarter} квартал {year}"
         new_sheet["C3"] = name
-        new_sheet["E3"] = f"KPI {Y}Q{X}"
+        new_sheet["E3"] = f"KPI {quarter}Q{year}"
 
         df_person = df_final[df_final.iloc[:, 1] == name]
         rows_with_index = list(enumerate(df_person.to_dict('records')))
