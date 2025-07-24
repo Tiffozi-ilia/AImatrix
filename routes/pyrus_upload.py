@@ -15,7 +15,7 @@ FIELD_IDS = {
 }
 
 FORM_ID = 484498
-PYRUS_URL = "https://api.pyrus.com/v4"
+PYRUS_URL = "https://pyrus.sovcombank.ru/api/v4"
 LOCAL_URL = "https://aimatrix-e8zs.onrender.com"
 
 
