@@ -20,7 +20,7 @@ def get_pyrus_token():
     if not login or not security_key:
         raise HTTPException(status_code=500, detail="PYRUS_LOGIN или PYRUS_SECURITY_KEY не заданы")
 
-    auth_url = "https://accounts.pyrus.com/api/v4/auth/"
+    auth_url = "https://pyrus.sovcombank.ru/api/v4/auth/"
     headers = {"Content-Type": "application/json"}
     payload = {"login": login, "security_key": security_key}
 
@@ -36,7 +36,7 @@ def get_pyrus_token():
         
 def get_data():
     token = get_pyrus_token()  # 🔁 вместо PYRUS_TOKEN из env
-    url = "https://api.pyrus.com/v4/forms/2309262/register"
+    url = "https://api.pyrus.sovcombank.ru/v4/forms/484498/register"
     headers = {"Authorization": f"Bearer {token}"}
     try:
         resp = requests.get(url, headers=headers)
