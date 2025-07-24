@@ -358,7 +358,7 @@ from utils.data_loader import get_pyrus_token
 
 # === Вспомогательная функция для отправки запросов в Pyrus API ===
 def send_to_pyrus(method: str, endpoint: str, payload: dict = None):
-    base_url = "https://api.pyrus.com/v4"
+    base_url = "https://pyrus.sovcombank.ru/api/v4"
     token = get_pyrus_token()
     headers = {
         "Authorization": f"Bearer {token}",
