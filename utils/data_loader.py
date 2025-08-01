@@ -36,7 +36,11 @@ def get_pyrus_token():
         
 def get_data():
     token = get_pyrus_token()  # 🔁 вместо PYRUS_TOKEN из env
+<<<<<<< HEAD
     url = "https://pyrus.sovcombank.ru/api/v4/forms/484498/register"
+=======
+    url = "https://api.pyrus.sovcombank.ru/v4/forms/484498/register"
+>>>>>>> 1d1db7cbff7c1ec0500bce755e296beb00d8b992
     headers = {"Authorization": f"Bearer {token}"}
     try:
         resp = requests.get(url, headers=headers)
