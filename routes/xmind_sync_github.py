@@ -8,6 +8,7 @@ router = APIRouter()
 
 @router.post("/xmind-sync")
 async def xmind_sync(url: str = Body(...)):
+    print(url)
 
     g = Github('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')
 
