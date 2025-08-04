@@ -74,11 +74,8 @@ async def detect_updated_items(url: str = Body(...)):
         "parent_id_xmind": "parent_id",
         "level_xmind": "level"
     })[["id", "parent_id", "level", "title", "body"]].to_dict(orient="records")
-<<<<<<< HEAD
 
     return {
         "content": format_as_markdown(records),
         "json": records
     }
-=======
->>>>>>> 1d1db7cbff7c1ec0500bce755e296beb00d8b992
