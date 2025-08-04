@@ -1,13 +1,13 @@
 from github import Github
 from github.InputGitAuthor import InputGitAuthor
 from fastapi import APIRouter
-import codecs
+import requests
 import os
 
 router = APIRouter()
 
 @router.post("/xmind-sync")
-async def xmind_sync(file):
+async def xmind_sync(url):
 
     token = os.environ.get('GITHUB_TOKEN')
     g = Github(token)
@@ -15,18 +15,21 @@ async def xmind_sync(file):
     owner = 'Tiffozi-ilia'
     repo_name = 'AImatrix'
     file_path = 'matrix.xmind'
-    branch = 'main'
+    branch = 'all-in'
 
     repo = g.get_repo(f"{owner}/{repo_name}")
     contents = repo.get_contents(file_path, ref=branch)
 
-    with codecs.open(file, 'rb') as f:
-        new_content = f.read()
+    response = requests.get(url)
+    new_content = response.content
+
+    # with codecs.open(file, 'rb') as f:
+    #     new_content = f.read()
 
     repo.update_file(
         contents.path,
         "Upload via DiFyBot",
         new_content,
         contents.sha,
-        branch='main',
+        branch=branch,
         author=InputGitAuthor("DiFyBot", "example@somemail.com"))
