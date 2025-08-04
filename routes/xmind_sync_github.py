@@ -1,13 +1,13 @@
 from github import Github
 from github.InputGitAuthor import InputGitAuthor
-from fastapi import APIRouter
+from fastapi import APIRouter, Body
 import requests
 import os
 
 router = APIRouter()
 
 @router.post("/xmind-sync")
-async def xmind_sync(url):
+async def xmind_sync(url: str = Body(...)):
 
     g = Github('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')
 
