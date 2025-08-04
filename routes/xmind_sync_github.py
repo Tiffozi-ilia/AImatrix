@@ -8,9 +8,14 @@ router = APIRouter()
 
 @router.post("/xmind-sync")
 async def xmind_sync(url: str = Body(...)):
-    print(url)
+    logs = []
+    def log(msg):
+        print(msg)
+        logs.append(msg)
+    
+    log(url)
 
-    g = Github('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')
+    g = Github("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")
 
     owner = 'Tiffozi-ilia'
     repo_name = 'AImatrix'
@@ -21,6 +26,7 @@ async def xmind_sync(url: str = Body(...)):
     contents = repo.get_contents(file_path, ref=branch)
 
     response = requests.get(url)
+    log(response.status_code)
     new_content = response.content
 
     # with codecs.open(file, 'rb') as f:
