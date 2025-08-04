@@ -9,8 +9,7 @@ router = APIRouter()
 @router.post("/xmind-sync")
 async def xmind_sync(url):
 
-    token = os.environ.get('GITHUB_TOKEN')
-    g = Github(token)
+    g = Github('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')
 
     owner = 'Tiffozi-ilia'
     repo_name = 'AImatrix'
