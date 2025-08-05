@@ -3,34 +3,45 @@ from github.InputGitAuthor import InputGitAuthor
 from fastapi import APIRouter, Body
 import requests
 import os
+import json
 
 router = APIRouter()
 
 @router.post("/xmind-sync")
-async def xmind_sync(url: str = Body(...)):
+async def xmind_sync(url: dict = Body(...)):
+
+    url = url['url']
+    
     logs = []
+
     def log(msg):
         print(msg)
         logs.append(msg)
-    
+
+    log(f'[XMIND-SYNC] got url dify')
     log(url)
 
-    g = Github("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")
+    GIT_TOKEN = os.environ.get('GITHUB_TOKEN')
+
+    g = Github(GIT_TOKEN)
 
     owner = 'Tiffozi-ilia'
     repo_name = 'AImatrix'
     file_path = 'matrix.xmind'
-    branch = 'all-in'
+    branch = 'main'
+
+    # owner = 'Bagzzz2022'
+    # repo_name = 'Test_update_github'
+    # file_path = 'matrix.xmind'
+    # branch = 'main'
 
     repo = g.get_repo(f"{owner}/{repo_name}")
     contents = repo.get_contents(file_path, ref=branch)
 
     response = requests.get(url)
-    log(response.status_code)
     new_content = response.content
 
-    # with codecs.open(file, 'rb') as f:
-    #     new_content = f.read()
+    log(f'[XMIND-SYNC] got new content')
 
     repo.update_file(
         contents.path,
@@ -39,3 +50,5 @@ async def xmind_sync(url: str = Body(...)):
         contents.sha,
         branch=branch,
         author=InputGitAuthor("DiFyBot", "example@somemail.com"))
+    
+    log(f'[XMIND-SYNC] xmind updated')
