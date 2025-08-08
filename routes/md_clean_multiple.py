@@ -20,13 +20,11 @@ def export_md_multiple_nodes(
             media_type="text/plain"
         )
 
-    content = "\n\n---\n\n".join(
-        f"===== DOCUMENT START: {row['id']} =====\n"
+    content = "\n\n===== DOCUMENT BREAK =====\n\n".join(  # уникальный маркер границы
         f"# {row['title']}\n\n"
         f"**id:** {row['id']}\n\n"
         f"**parent_id:** {row['parent_id']}\n\n"
-        f"{row['body']}\n\n"
-        f"===== DOCUMENT END: {row['id']} ====="
+        f"{row['body'] or ''}"
         for _, row in filtered_df.iterrows()
     )
 
