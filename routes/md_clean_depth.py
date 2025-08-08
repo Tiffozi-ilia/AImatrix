@@ -25,11 +25,22 @@ def export_md_clean(
     df = build_df_from_api()
     valid_ids = {root_id}
     valid_ids.update(collect_children_ids(df, root_id, set(), 0, depth))
-    filtered_df = df[df['id'].isin(valid_ids)]
-    filtered_df = filtered_df.sort_values(by=['parent_id', 'id'])
 
-    content = "\n\n".join(
-        f"# {row['title']}\n\n**id:** {row['id']}\n\n**parent_id:** {row['parent_id']}\n\n{row['body']}\n\n---"
+    filtered_df = df[df['id'].isin(valid_ids)].sort_values(by=['parent_id', 'id'])
+
+    if filtered_df.empty:
+        return PlainTextResponse(
+            "No matching nodes found",
+            status_code=404,
+            media_type="text/plain"
+        )
+
+    content = "\n\n---\n\n".join(  # разделитель между документами
+        f"# {row['title']}\n\n"
+        f"**id:** {row['id']}\n\n"
+        f"**parent_id:** {row['parent_id']}\n\n"
+        f"{row['body']}\n\n---"
         for _, row in filtered_df.iterrows()
     )
+
     return PlainTextResponse(content, media_type="text/markdown")
