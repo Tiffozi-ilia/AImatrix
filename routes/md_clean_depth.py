@@ -35,11 +35,11 @@ def export_md_clean(
             media_type="text/plain"
         )
 
-    content = "\n\n---\n\n".join(  # разделитель между документами
+    content = "\n\n===== DOCUMENT BREAK =====\n\n".join(  # уникальный разделитель
         f"# {row['title']}\n\n"
         f"**id:** {row['id']}\n\n"
         f"**parent_id:** {row['parent_id']}\n\n"
-        f"{row['body']}\n\n---"
+        f"{row['body'] or ''}"
         for _, row in filtered_df.iterrows()
     )
 
