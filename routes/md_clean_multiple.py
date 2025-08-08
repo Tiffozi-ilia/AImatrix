@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Query
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse
 from utils.data_loader import build_df_from_api
 
 router = APIRouter()
@@ -8,21 +8,30 @@ router = APIRouter()
 def export_md_multiple_nodes(
     node_ids: str = Query(..., description="Comma-separated node IDs, e.g. 02.02,03.03.03")
 ):
-    # Разбиваем вручную
+    # Разбиваем строку на список
     ids = [id.strip() for id in node_ids.split(",") if id.strip()]
     
     df = build_df_from_api()
     filtered_df = df[df['id'].isin(ids)]
 
     if filtered_df.empty:
-        return PlainTextResponse(
-            "No matching nodes found", 
-            status_code=404,
-            media_type="text/plain"
+        return JSONResponse(
+            content={"error": "No matching nodes found"},
+            status_code=404
         )
 
-    content = "\n\n".join(
-        f"# {row['title']}\n\n**id:** {row['id']}\n\n**parent_id:** {row['parent_id']}\n\n{row['body']}\n\n---"
+    # Формируем массив объектов
+    result = [
+        {
+            "id": row["id"],
+            "markdown": (
+                f"# {row['title']}\n\n"
+                f"**id:** {row['id']}\n\n"
+                f"**parent_id:** {row['parent_id']}\n\n"
+                f"{row['body']}\n\n---"
+            )
+        }
         for _, row in filtered_df.iterrows()
-    )
-    return PlainTextResponse(content, media_type="text/markdown")
+    ]
+
+    return JSONResponse(content=result)
