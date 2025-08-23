@@ -1,0 +1,238 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "03.04.03",
+  "title": "User Story",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "instrument_id",
+    "name",
+    "us_items"
+  ],
+  "$defs": {
+    "investCriterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "flag",
+        "conclusion"
+      ],
+      "properties": {
+        "flag": {
+          "type": "boolean"
+        },
+        "conclusion": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "properties": {
+    "instrument_id": {
+      "type": "string",
+      "const": "03.04.03"
+    },
+    "name": {
+      "type": "string",
+      "const": "User Story"
+    },
+    "us_items": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "task_id",  
+            "task_name",
+            "us_code",
+            "us_body",
+            "acceptance_criteria",
+            "invest"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Задача в Pyrus или иной id, который сообщает пользователь"
+          },  
+          "task_name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Название задачи (обязательное поле)"            
+          },
+          "us_code": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^.+\\.US$",
+            "description": "Должно быть строго равно task_id + \".US\"",
+            "rule_ref": {
+              "type": "string",
+              "const": "03.04.03"
+            },
+            "title_ref": {
+              "type": "string",
+              "const": "### Код User Story (US)"
+            }
+          },
+          "us_body": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "as_a",
+              "i_want",
+              "so_that"
+            ],
+            "properties": {
+              "as_a": {
+                "type": "string",
+                "minLength": 1,
+                "rule_ref": {
+                  "type": "string",
+                  "const": "03.04.03.01"
+                },
+                "title_ref": {
+                  "type": "string",
+                  "const": "### Я как ..."
+                }
+              },
+              "i_want": {
+                "type": "string",
+                "minLength": 1,
+                "rule_ref": {
+                  "type": "string",
+                  "const": "03.04.03.01"
+                },
+                "title_ref": {
+                  "type": "string",
+                  "const": "### Хочу ..."
+                }
+              },
+              "so_that": {
+                "type": "string",
+                "minLength": 1,
+                "rule_ref": {
+                  "type": "string",
+                  "const": "03.04.03.01"
+                },
+                "title_ref": {
+                  "type": "string",
+                  "const": "### Чтобы ..."
+                }
+              }
+            }
+          },
+          "acceptance_criteria": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": ".*\\S.*",
+                  "description": "Простая текстовая формулировка AC"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "given",
+                    "when",
+                    "then"
+                  ],
+                  "properties": {
+                    "given": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": ".*\\S.*"
+                    },
+                    "when": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": ".*\\S.*"
+                    },
+                    "then": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": ".*\\S.*"
+                    },
+                    "and": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": ".*\\S.*"
+                      },
+                      "minItems": 1
+                    },
+                    "but": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": ".*\\S.*"
+                      },
+                      "minItems": 1
+                    }
+                  },
+                  "description": "Gherkin-формат: Given / When / Then (+And/+But)"
+                }
+              ]
+            },
+            "minItems": 1,
+            "uniqueItems": true,
+            "rule_ref": {
+              "type": "string",
+              "const": "03.04.03.02"
+            },
+            "title_ref": {
+              "type": "string",
+              "const": ""
+            }
+          },
+          "invest": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "I",
+              "N",
+              "V",
+              "E",
+              "S",
+              "T"
+            ],
+            "properties": {
+              "I": {
+                "$ref": "#/$defs/investCriterion"
+              },
+              "N": {
+                "$ref": "#/$defs/investCriterion"
+              },
+              "V": {
+                "$ref": "#/$defs/investCriterion"
+              },
+              "E": {
+                "$ref": "#/$defs/investCriterion"
+              },
+              "S": {
+                "$ref": "#/$defs/investCriterion"
+              },
+              "T": {
+                "$ref": "#/$defs/investCriterion"
+              }
+            },
+            "rule_ref": {
+              "type": "string",
+              "const": "03.04.03.03"
+            },
+            "title_ref": {
+              "type": "string",
+              "const": ""
+            }
+          }
+        }
+      }
+    }
+  }
+}
