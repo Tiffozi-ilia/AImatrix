@@ -6,9 +6,9 @@ from pathlib import Path as P
 router = APIRouter()
 
 # Координаты репозитория (если хочешь — вынеси в конфиг)
-OWNER = "Tiff0zi"
-REPO = "sotiio_data"
-DEFAULT_REF = "main"
+OWNER = "Tiffozi-ilia"
+REPO = "AImatrix"
+DEFAULT_REF = "all-in"
 BASE = f"https://raw.githubusercontent.com/{OWNER}/{REPO}"
 
 EXT_TO_CT = {
