@@ -16,7 +16,6 @@ def _pyrus_headers():
 def upload_to_pyrus(
     task_id: int = Query(..., description="ID задачи в Pyrus"),
     filename: str = Query("artifact.json", description="Имя файла в Pyrus"),
-    src_url: Optional[str] = Query(None, description="Presigned URL или относительный /<id>/file.json"),
     payload: Optional[Union[dict, list]] = Body(None, description="JSON-данные вместо src_url"),
 ):
     # Ровно один из двух источников
