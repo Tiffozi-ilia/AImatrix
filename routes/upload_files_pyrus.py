@@ -1,3 +1,4 @@
+# routers/pyrus_simple.py
 import json
 from typing import Optional, Union
 import requests
@@ -12,24 +13,32 @@ def _pyrus_headers():
     return {"Authorization": f"Bearer {get_pyrus_token()}"}
 
 @router.post("/upload_files_pyrus")
-def upload_to_pyrus(
-    task_id: int = Query(..., description="ID задачи в Pyrus"),
-    filename: str = Query("artifact.json", description="Имя файла в Pyrus"),
-    src_url: Optional[str] = Query(None, description="Presigned URL или относительный /<id>/file.json"),
-    payload: Optional[Union[dict, list]] = Body(None, description="JSON-данные вместо src_url"),
+async def upload_to_pyrus(
+    request_data: dict = Body(...)  # Принимаем все данные из тела запроса
 ):
-    # Если данные пришли в поле "body", извлекаем их
-    if isinstance(payload, dict) and "body" in payload:
-        payload = payload["body"]
-
-    # Ровно один из двух источников
-    if (src_url is None) == (payload is None):
-        raise HTTPException(status_code=400, detail="Укажите либо src_url, либо JSON в body — строго один источник.")
+    # Извлекаем параметры из тела запроса
+    filename = request_data.get("filename", "artifact.json")
+    task_id = request_data.get("task_id")
+    body_data = request_data.get("body")
+    src_url = request_data.get("src_url")
+    
+    # Проверяем обязательные параметры
+    if task_id is None:
+        raise HTTPException(status_code=400, detail="Не указан task_id")
+    
+    # Проверяем, что указан ровно один источник данных
+    if (src_url is None) == (body_data is None):
+        raise HTTPException(status_code=400, detail="Укажите либо src_url, либо body — строго один источник.")
 
     # 1) Получаем байты файла
-    if payload is not None:
+    if body_data is not None:
         try:
-            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            # Если body_data уже является строкой, пытаемся ее распарсить
+            if isinstance(body_data, str):
+                parsed_data = json.loads(body_data)
+                data = json.dumps(parsed_data, ensure_ascii=False).encode("utf-8")
+            else:
+                data = json.dumps(body_data, ensure_ascii=False).encode("utf-8")
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Некорректный JSON: {e}")
     else:
