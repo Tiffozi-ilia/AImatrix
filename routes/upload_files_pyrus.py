@@ -11,7 +11,7 @@ PYRUS_API = "https://pyrus.sovcombank.ru/api/v4"
 def _pyrus_headers():
     return {"Authorization": f"Bearer {get_pyrus_token()}"}
 
-@router.post("/pyrus/upload_url")
+@router.post("/upload_files_pyrus")
 def upload_url_to_task(
     task_id: int = Query(..., description="ID задачи в Pyrus"),
     src_url: str = Query(..., description="Ссылка на JSON (presigned)"),
