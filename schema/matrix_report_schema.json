@@ -4,22 +4,27 @@
   "title": "Competency Goal Verification Report",
   "type": "object",
   "additionalProperties": false,
-  "required": ["report_date", "full_name", "current_grade", "results"],
+  "required": ["file_name", "report_date", "full_name", "current_grade", "results"],
   "properties": {
+    "file_name": {
+      "type": "string",
+      "pattern": "^matrix_[A-Za-z]+_[0-9]{4}-[0-9]{2}-[0-9]{2}_report\\.json$",
+      "description": "Report file name. Mask: matrix_{LastNameTranslit}_{YYYY-MM-DD}_report.json"
+    },
     "report_date": {
       "type": "string",
       "format": "date",
-      "description": "Дата отчёта в формате YYYY-MM-DD"
+      "description": "Report date in YYYY-MM-DD format"
     },
     "full_name": {
       "type": "string",
       "minLength": 1,
-      "description": "Фамилия и Имя сотрудника"
+      "description": "Employee Last Name and First Name"
     },
     "current_grade": {
       "type": "string",
       "minLength": 1,
-      "description": "Текущий грейд сотрудника"
+      "description": "Employee current grade"
     },
     "results": {
       "type": "array",
