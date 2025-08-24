@@ -38,7 +38,7 @@ async def upload_to_pyrus(
                 parsed_data = json.loads(body_data)
                 data = json.dumps(parsed_data, ensure_ascii=False).encode("utf-8")
             else:
-                data = json.dumps(body_data, ensure_ascii=False).encode("utf-8")
+                data = json.dumps(body_data, ensure_ascii=False, indent=2).encode("utf-8")
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Некорректный JSON: {e}")
     else:
