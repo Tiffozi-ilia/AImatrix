@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from utils.data_loader import get_pyrus_token
 
 router = APIRouter()
-PYRUS_API = "https://api.pyrus.com/v4"
+PYRUS_API = "https://pyrus.sovcombank.ru/api/v4"
 
 def _pyrus_headers():
     return {"Authorization": f"Bearer {get_pyrus_token()}"}
