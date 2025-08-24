@@ -1,4 +1,3 @@
-# routers/pyrus_simple.py
 import json
 from typing import Optional, Union
 import requests
@@ -19,6 +18,10 @@ def upload_to_pyrus(
     src_url: Optional[str] = Query(None, description="Presigned URL или относительный /<id>/file.json"),
     payload: Optional[Union[dict, list]] = Body(None, description="JSON-данные вместо src_url"),
 ):
+    # Если данные пришли в поле "body", извлекаем их
+    if isinstance(payload, dict) and "body" in payload:
+        payload = payload["body"]
+
     # Ровно один из двух источников
     if (src_url is None) == (payload is None):
         raise HTTPException(status_code=400, detail="Укажите либо src_url, либо JSON в body — строго один источник.")
