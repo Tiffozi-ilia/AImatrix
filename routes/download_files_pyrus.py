@@ -1,24 +1,34 @@
 # routes/download_files_pyrus.py
-from fastapi import APIRouter, Query, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
-import requests, io, zipfile
-from utils.data_loader import get_pyrus_token  # ← токен берём отсюда
+# -*- coding: utf-8 -*-
+from typing import Dict, List, Any
 from urllib.parse import quote
+import io, zipfile, requests
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse, JSONResponse
+from utils.data_loader import get_pyrus_token  # используем твой рабочий лоадер
 
 router = APIRouter()
-BASE = "https://pyrus.sovcombank.ru/api/v4"
 
-def _auth():
+BASE = "https://pyrus.sovcombank.ru/api/v4"
+READ_TIMEOUT = 300
+LIST_TIMEOUT = 60
+CHUNK = 8192
+
+def _auth() -> Dict[str, str]:
     return {"Authorization": f"Bearer {get_pyrus_token()}"}
 
-def _pick_name(a):  # разный нейминг у вложений
+def _pick_name(a: Dict[str, Any]) -> str | None:
     return a.get("file_name") or a.get("name") or a.get("filename")
 
-def _pick_guid(a):
+def _pick_guid(a: Dict[str, Any]) -> str | None:
     return a.get("guid") or a.get("file_guid") or a.get("id")
 
-def _safe(s):
+def _safe(s: str) -> str:
     return "".join(ch for ch in s if ch.isalnum() or ch in ("-", "_", ".", " ")).strip().replace(" ", "_")
+
+def _content_disposition(filename: str) -> Dict[str, str]:
+    quoted = quote(filename)
+    return {"Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quoted}'}
 
 @router.get("/download_files_pyrus")
 def file_by_name(
@@ -29,17 +39,17 @@ def file_by_name(
     if match_mode not in ("exact", "contains"):
         raise HTTPException(400, "match_mode must be 'exact' or 'contains'")
 
-    q = filename.strip().lower()
+    q = (filename or "").strip()
     if not q:
         raise HTTPException(400, "filename is empty")
 
     # 1) список вложений
-    r = requests.get(f"{BASE}/tasks/{task_id}", headers=_auth(), timeout=60)
+    r = requests.get(f"{BASE}/tasks/{task_id}", headers=_auth(), timeout=LIST_TIMEOUT)
     if r.status_code >= 400:
         raise HTTPException(502, f"Pyrus list error: {r.text}")
     task = r.json() or {}
 
-    files = []
+    files: List[Dict[str, str]] = []
     for c in task.get("comments", []) or []:
         ts = c.get("created") or c.get("date") or ""
         for a in c.get("attachments", []) or []:
@@ -49,14 +59,15 @@ def file_by_name(
                 files.append({"name": str(name), "guid": str(guid), "ts": ts})
 
     names_all = [f["name"] for f in files]
+    q_low = q.lower()
 
-    # 2) поиск совпадений (регистронезависимо)
+    # 2) поиск (регистронезависимо)
     if match_mode == "exact":
-        matches = [f for f in files if f["name"].lower() == q]
+        matches = [f for f in files if f["name"].lower() == q_low]
     else:
-        matches = [f for f in files if q in f["name"].lower()]
+        matches = [f for f in files if q_low in f["name"].lower()]
 
-    # 3) возврат результата
+    # 3) возврат
     if not matches:
         return JSONResponse(
             status_code=404,
@@ -65,33 +76,31 @@ def file_by_name(
 
     if len(matches) == 1:
         m = matches[0]
-        rr = requests.get(f"{BASE}/files/download/{quote(m['guid'])}", headers=_auth(), stream=True, timeout=300)
+        rr = requests.get(f"{BASE}/files/download/{quote(m['guid'])}", headers=_auth(), stream=True, timeout=READ_TIMEOUT)
         if rr.status_code >= 400:
             raise HTTPException(502, f"Pyrus download error: {rr.text}")
         ctype = rr.headers.get("Content-Type", "application/octet-stream")
-        headers = {"Content-Disposition": f'attachment; filename="{m["name"]}"'}
-        return StreamingResponse(rr.iter_content(8192), media_type=ctype, headers=headers)
+        return StreamingResponse(rr.iter_content(CHUNK), media_type=ctype, headers=_content_disposition(m["name"]))
 
-    # >1: exact + все имена одинаковые → последняя версия
+    # >1 совпадений
     if match_mode == "exact" and len({m["name"].lower() for m in matches}) == 1:
+        # последняя версия
         last = sorted(matches, key=lambda x: x["ts"] or "")[-1]
-        rr = requests.get(f"{BASE}/files/download/{quote(last['guid'])}", headers=_auth(), stream=True, timeout=300)
+        rr = requests.get(f"{BASE}/files/download/{quote(last['guid'])}", headers=_auth(), stream=True, timeout=READ_TIMEOUT)
         if rr.status_code >= 400:
             raise HTTPException(502, f"Pyrus download error: {rr.text}")
         ctype = rr.headers.get("Content-Type", "application/octet-stream")
-        headers = {
-            "Content-Disposition": f'attachment; filename="{last["name"]}"',
-            "X-Pyrus-Match-Count": str(len(matches)),
-            "X-Pyrus-Selected": "latest",
-        }
-        return StreamingResponse(rr.iter_content(8192), media_type=ctype, headers=headers)
+        headers = _content_disposition(last["name"])
+        headers["X-Pyrus-Match-Count"] = str(len(matches))
+        headers["X-Pyrus-Selected"] = "latest"
+        return StreamingResponse(rr.iter_content(CHUNK), media_type=ctype, headers=headers)
 
-    # иначе → ZIP всех совпавших
+    # иначе → ZIP
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         used = set()
         for m in matches:
-            rr = requests.get(f"{BASE}/files/download/{quote(m['guid'])}", headers=_auth(), timeout=300)
+            rr = requests.get(f"{BASE}/files/download/{quote(m['guid'])}", headers=_auth(), timeout=READ_TIMEOUT)
             if rr.status_code >= 400:
                 raise HTTPException(502, f"Pyrus download error: {rr.text}")
             arc = m["name"]
@@ -107,9 +116,7 @@ def file_by_name(
             zf.writestr(arc, rr.content)
 
     buf.seek(0)
-    zip_name = f"pyrus_{task_id}_{_safe(filename)}_bundle.zip"
-    headers = {
-        "Content-Disposition": f'attachment; filename="{zip_name}"',
-        "X-Pyrus-Match-Count": str(len(matches)),
-    }
+    zip_name = f"pyrus_{task_id}_{_safe(q)}_bundle.zip"
+    headers = _content_disposition(zip_name)
+    headers["X-Pyrus-Match-Count"] = str(len(matches))
     return StreamingResponse(buf, media_type="application/zip", headers=headers)
