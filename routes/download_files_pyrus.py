@@ -5,7 +5,7 @@ from urllib.parse import quote
 import io, zipfile, requests
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse, JSONResponse
-from utils.data_loader import get_pyrus_token  # используем твой рабочий лоадер
+from utils.data_loader import get_pyrus_token  # берём токен из твоего лоадера
 
 router = APIRouter()
 
@@ -27,15 +27,24 @@ def _safe(s: str) -> str:
     return "".join(ch for ch in s if ch.isalnum() or ch in ("-", "_", ".", " ")).strip().replace(" ", "_")
 
 def _content_disposition(filename: str) -> Dict[str, str]:
-    quoted = quote(filename)
-    return {"Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quoted}'}
+    quoted_utf8 = quote(filename)
+    return {"Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quoted_utf8}'}
 
-@router.get("/download_files_pyrus")
+@router.get("/pyrus/file_by_name")
 def file_by_name(
     task_id: int = Query(..., description="ID задачи Pyrus"),
     filename: str = Query(..., description="Искомое имя файла"),
     match_mode: str = Query("exact", description="exact|contains"),
 ):
+    """
+    Ищет вложения в задаче Pyrus по имени:
+      - 0 совпадений → 404 + список доступных имён;
+      - 1 совпадение → отдаём файл (stream);
+      - >1 совпадений:
+          * exact и все имена идентичны → отдаём последнюю версию;
+          * иначе → ZIP всех совпавших.
+    Поиск регистронезависимый.
+    """
     if match_mode not in ("exact", "contains"):
         raise HTTPException(400, "match_mode must be 'exact' or 'contains'")
 
@@ -43,7 +52,7 @@ def file_by_name(
     if not q:
         raise HTTPException(400, "filename is empty")
 
-    # 1) список вложений
+    # 1) список вложений задачи
     r = requests.get(f"{BASE}/tasks/{task_id}", headers=_auth(), timeout=LIST_TIMEOUT)
     if r.status_code >= 400:
         raise HTTPException(502, f"Pyrus list error: {r.text}")
@@ -51,7 +60,7 @@ def file_by_name(
 
     files: List[Dict[str, str]] = []
     for c in task.get("comments", []) or []:
-        ts = c.get("created") or c.get("date") or ""
+        ts = c.get("created") or c.get("date") or ""  # строка-время комментария
         for a in c.get("attachments", []) or []:
             name = _pick_name(a)
             guid = _pick_guid(a)
@@ -61,7 +70,7 @@ def file_by_name(
     names_all = [f["name"] for f in files]
     q_low = q.lower()
 
-    # 2) поиск (регистронезависимо)
+    # 2) поиск (case-insensitive)
     if match_mode == "exact":
         matches = [f for f in files if f["name"].lower() == q_low]
     else:
@@ -84,7 +93,7 @@ def file_by_name(
 
     # >1 совпадений
     if match_mode == "exact" and len({m["name"].lower() for m in matches}) == 1:
-        # последняя версия
+        # все имена одинаковы → последняя версия по ts (строка; если пусто — порядок API)
         last = sorted(matches, key=lambda x: x["ts"] or "")[-1]
         rr = requests.get(f"{BASE}/files/download/{quote(last['guid'])}", headers=_auth(), stream=True, timeout=READ_TIMEOUT)
         if rr.status_code >= 400:
@@ -95,7 +104,7 @@ def file_by_name(
         headers["X-Pyrus-Selected"] = "latest"
         return StreamingResponse(rr.iter_content(CHUNK), media_type=ctype, headers=headers)
 
-    # иначе → ZIP
+    # иначе — ZIP
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         used = set()
