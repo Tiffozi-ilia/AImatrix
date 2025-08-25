@@ -28,7 +28,7 @@ def _safe(s: str) -> str:
 
 def _content_disposition(filename: str) -> Dict[str, str]:
     quoted_utf8 = quote(filename)
-    return {"Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quoted_utf8}'}
+    return {"Content-Disposition": f'attachment; filename=\"{filename}\"; filename*=UTF-8''{quoted_utf8}'}
 
 @router.get("/download_files_pyrus")
 def file_by_name(
@@ -59,9 +59,20 @@ def file_by_name(
     task = r.json() or {}
 
     files: List[Dict[str, str]] = []
-    for c in task.get("comments", []) or []:
-        ts = c.get("created") or c.get("date") or ""  # строка-время комментария
-        for a in c.get("attachments", []) or []:
+
+    # (НОВОЕ) 1a) вложения верхнего уровня (блок "ФАЙЛЫ" справа)
+    for a in (task.get("files") or []):
+        name = _pick_name(a)
+        guid = _pick_guid(a)
+        if name and guid:
+            # у top-level файлов иногда есть своё created; если нет — пусто
+            ts = a.get("created") or a.get("date") or ""
+            files.append({"name": str(name), "guid": str(guid), "ts": ts})
+
+    # (БЫЛО) 1b) вложения в комментариях (основной путь)
+    for c in (task.get("comments") or []):
+        ts = c.get("created") or c.get("date") or ""
+        for a in (c.get("attachments") or []):
             name = _pick_name(a)
             guid = _pick_guid(a)
             if name and guid:
@@ -93,7 +104,7 @@ def file_by_name(
 
     # >1 совпадений
     if match_mode == "exact" and len({m["name"].lower() for m in matches}) == 1:
-        # все имена одинаковы → последняя версия по ts (строка; если пусто — порядок API)
+        # все имена одинаковы → последняя версия по ts (если пусто — по порядку)
         last = sorted(matches, key=lambda x: x["ts"] or "")[-1]
         rr = requests.get(f"{BASE}/files/download/{quote(last['guid'])}", headers=_auth(), stream=True, timeout=READ_TIMEOUT)
         if rr.status_code >= 400:
