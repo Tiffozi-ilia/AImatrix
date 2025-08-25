@@ -30,7 +30,7 @@ def _content_disposition(filename: str) -> Dict[str, str]:
     quoted_utf8 = quote(filename)
     return {"Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quoted_utf8}'}
 
-@router.get("/pyrus/file_by_name")
+@router.get("/download_files_pyrus")
 def file_by_name(
     task_id: int = Query(..., description="ID задачи Pyrus"),
     filename: str = Query(..., description="Искомое имя файла"),
