@@ -65,8 +65,8 @@
           "us_code": {
             "type": "string",
             "minLength": 1,
-            "pattern": "^.+\\.US$",
-            "description": "Должно быть строго равно task_id + \".US\"",
+            "pattern": "^.+\\_US$",
+            "description": "Должно быть строго равно task_id + \"_US\"",
             "rule_ref": {
               "type": "string",
               "const": "03.04.03"
