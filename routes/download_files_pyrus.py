@@ -20,7 +20,7 @@ def _pick_guid(a):
 def _safe(s):
     return "".join(ch for ch in s if ch.isalnum() or ch in ("-", "_", ".", " ")).strip().replace(" ", "_")
 
-@router.get("/pyrus/file_by_name")
+@router.get("/download_files_pyrus")
 def file_by_name(
     task_id: int = Query(..., description="ID задачи Pyrus"),
     filename: str = Query(..., description="Искомое имя файла"),
