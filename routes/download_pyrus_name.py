@@ -51,7 +51,7 @@ def _download_response(guid: str) -> requests.Response:
         raise HTTPException(502, f"pyrus_error (download): {r.text}")
     return r
 
-@router.get("/download_pyrus_name")
+@router.get("/pyrus/file_by_name")
 def pyrus_file_by_name(
     task_id: int = Query(..., description="ID задачи Pyrus"),
     filename: str = Query(..., description="Искомое имя файла"),
@@ -100,4 +100,41 @@ def pyrus_file_by_name(
 
     # >1 совпадений
     all_same_name = (match_mode == "exact") and len({m["name"].lower() for m in matches}) == 1
-    if all_sa_
+    if all_same_name:
+        # выбираем "последнюю версию" по uploaded_at (если пусто — лекс. сортировка даёт приемлемый порядок)
+        matches_sorted = sorted(matches, key=lambda x: x.get("uploaded_at") or "")
+        last = matches_sorted[-1]
+        r = _download_response(last["guid"])
+        ctype = r.headers.get("Content-Type", "application/octet-stream")
+        headers = {
+            "Content-Disposition": f'attachment; filename="{last["name"]}"',
+            "X-Pyrus-Match-Count": str(len(matches)),
+            "X-Pyrus-Selected": "latest"
+        }
+        return StreamingResponse(r.iter_content(chunk_size=8192), media_type=ctype, headers=headers)
+
+    # иначе — собираем ZIP
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        seen = set()
+        for m in matches:
+            rr = _download_response(m["guid"])
+            content = rr.content  # для больших файлов можно заменить на потоковую упаковку
+            arcname = m["name"]
+            base, dot, ext = arcname.partition(".")
+            # избегаем дубликатов имён внутри архива
+            while arcname in seen:
+                idx = 1
+                while f"{base} ({idx}){dot}{ext}" in seen:
+                    idx += 1
+                arcname = f"{base} ({idx}){dot}{ext}" if dot else f"{base} ({idx})"
+            seen.add(arcname)
+            zf.writestr(arcname, content)
+
+    zip_buf.seek(0)
+    zip_name = f"pyrus_{task_id}_{_safe(filename_q)}_bundle.zip"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{zip_name}"',
+        "X-Pyrus-Match-Count": str(len(matches))
+    }
+    return StreamingResponse(zip_buf, media_type="application/zip", headers=headers)
