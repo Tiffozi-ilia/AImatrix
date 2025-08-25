@@ -198,10 +198,62 @@ def file_by_name(
         rr = requests.get(f"{BASE}/files/download/{quote(m['guid'])}",
                           headers=_auth(), stream=True, timeout=READ_TIMEOUT)
         if rr.status_code >= 400:
-            raise HTTPException(502, f"Pyrus download error: {rr.text})
+            raise HTTPException(502, f"Pyrus download error: {rr.text}")
         ctype = "application/json; charset=utf-8" if m["name"].lower().endswith(".json") \
                 else rr.headers.get("Content-Type", "application/octet-stream")
         headers = _content_disposition(m["name"])
         headers["X-Pyrus-Source"]   = m.get("src") or ""
         headers["X-Pyrus-Name-Key"] = m.get("name_key") or ""
-        headers["X-Pyrus-Guid-Key]()
+        headers["X-Pyrus-Guid-Key"] = m.get("guid_key") or ""
+        return StreamingResponse(rr.iter_content(CHUNK), media_type=ctype, headers=headers)
+
+    # 7) Если exact и имена одинаковы — берём «последнюю» (prefer_latest)
+    if prefer_latest and match_mode == "exact" and len({m["name"].lower() for m in matches}) == 1:
+        last = sorted(matches, key=lambda x: x["ts"] or "")[-1]
+        rr = requests.get(f"{BASE}/files/download/{quote(last['guid'])}",
+                          headers=_auth(), stream=True, timeout=READ_TIMEOUT)
+        if rr.status_code >= 400:
+            raise HTTPException(502, f"Pyrus download error: {rr.text}")
+        ctype = "application/json; charset=utf-8" if last["name"].lower().endswith(".json") \
+                else rr.headers.get("Content-Type", "application/octet-stream")
+        headers = _content_disposition(last["name"])
+        headers["X-Pyrus-Match-Count"] = str(len(matches))
+        headers["X-Pyrus-Selected"] = "latest"
+        headers["X-Pyrus-Source"]   = last.get("src") or ""
+        headers["X-Pyrus-Name-Key"] = last.get("name_key") or ""
+        headers["X-Pyrus-Guid-Key"] = last.get("guid_key") or ""
+        return StreamingResponse(rr.iter_content(CHUNK), media_type=ctype, headers=headers)
+
+    # 8) Иначе — ZIP всех совпадений (устойчиво к частичным ошибкам)
+    buf = io.BytesIO()
+    failed = []
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        used_names = set()
+        for m in matches:
+            rr = requests.get(f"{BASE}/files/download/{quote(m['guid'])}",
+                              headers=_auth(), timeout=READ_TIMEOUT)
+            if rr.status_code >= 400:
+                failed.append({"name": m["name"], "guid": m["guid"], "code": rr.status_code})
+                continue
+            arc = m["name"]
+            if arc in used_names:
+                base, dot, ext = arc.partition(".")
+                idx = 1
+                n = f"{base} ({idx}){dot}{ext}" if dot else f"{base} ({idx})"
+                while n in used_names:
+                    idx += 1
+                    n = f"{base} ({idx}){dot}{ext}" if dot else f"{base} ({idx})"
+                arc = n
+            used_names.add(arc)
+            zf.writestr(arc, rr.content)
+
+    if not used_names and failed:
+        return JSONResponse(status_code=502, content={"detail": "download_failed", "failed": failed})
+
+    buf.seek(0)
+    zip_name = f"pyrus_{task_id}_{_safe(q)}_bundle.zip"
+    headers = _content_disposition(zip_name)
+    headers["X-Pyrus-Match-Count"] = str(len(matches))
+    if failed:
+        headers["X-Pyrus-Failed-Count"] = str(len(failed))
+    return StreamingResponse(buf, media_type="application/zip", headers=headers)
