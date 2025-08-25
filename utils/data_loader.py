@@ -56,7 +56,7 @@ def _download_response(guid: str) -> requests.Response:
         raise HTTPException(502, f"pyrus_error (download): {r.text}")
     return r
 
-@router.get("/pyrus/file_by_name")
+@router.get("/download_files_pyrus")
 def pyrus_file_by_name(
     task_id: int = Query(..., description="ID задачи Pyrus"),
     filename: str = Query(..., description="Искомое имя файла"),
