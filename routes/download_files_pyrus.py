@@ -1,6 +1,6 @@
 # routes/download_files_pyrus.py
 # -*- coding: utf-8 -*-
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any
 from urllib.parse import quote
 import io, zipfile, requests, logging, re
 from fastapi import APIRouter, HTTPException, Query
@@ -15,56 +15,62 @@ READ_TIMEOUT = 300
 LIST_TIMEOUT = 60
 CHUNK = 8192
 
-# --- keys / heuristics ----------------------------------------------------
 GUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
-NAME_KEYS = ("file_name","fileName","name","filename","display_name","displayName","original_name","originalName")
-GUID_KEYS = ("file_guid","fileGuid","guid")
 
-# --- helpers --------------------------------------------------------------
 def _auth() -> Dict[str, str]:
     return {"Authorization": f"Bearer {get_pyrus_token()}"}
 
-def _unwrap(a: Dict[str, Any] | None) -> Dict[str, Any]:
-    """Некоторые ответы приходят как {'file': {...}}."""
-    if not a:
-        return {}
-    return a["file"] if isinstance(a.get("file"), dict) else a
+def _pick_name(attachment: Dict[str, Any]) -> str | None:
+    """Извлекает имя файла из объекта вложения, учитывая разные форматы Pyrus API."""
+    possible_names = [
+        attachment.get("file_name"),
+        attachment.get("fileName"),
+        attachment.get("name"),
+        attachment.get("filename"),
+        attachment.get("display_name"),
+        attachment.get("displayName"),
+        attachment.get("original_name"),
+        attachment.get("originalName"),
+    ]
+    file_obj = attachment.get("file")
+    if isinstance(file_obj, dict):
+        possible_names.extend([
+            file_obj.get("file_name"),
+            file_obj.get("fileName"),
+            file_obj.get("name"),
+            file_obj.get("filename"),
+            file_obj.get("display_name"),
+            file_obj.get("displayName"),
+            file_obj.get("original_name"),
+            file_obj.get("originalName"),
+        ])
+    for name in possible_names:
+        if name:
+            return str(name)
+    return None
 
-def _pick_value(a: Dict[str, Any], keys: Tuple[str, ...]) -> Tuple[str | None, str | None]:
-    """Вернуть (значение, имя_ключа) по первому непустому ключу (учитывая обёртку file)."""
-    a = _unwrap(a)
-    for k in keys:
-        v = a.get(k)
-        if v:
-            return str(v), k
-    return None, None
-
-def _pick_name(att: Dict[str, Any]) -> Tuple[str | None, str | None]:
-    return _pick_value(att, NAME_KEYS)
-
-def _pick_guid(att: Dict[str, Any]) -> Tuple[str | None, str | None]:
+def _pick_guid(attachment: Dict[str, Any]) -> str | None:
     """
-    Возвращает только реальный file GUID:
-      - сначала поля guid/file_guid/fileGuid
-      - иначе пробуем извлечь из downloadUrl
-    НЕ используем id/fileId, чтобы не плодить псевдодубли.
+    Возвращает ТОЛЬКО реальный file GUID (а не id вложения/коммента).
+    Сначала пытаемся поля guid/file_guid/fileGuid;
+    если нет — пробуем выдёрнуть из download_url.
     """
-    v, k = _pick_value(att, GUID_KEYS)
-    if isinstance(v, str) and GUID_RE.match(v):
-        return v, k
-    a = _unwrap(att)
-    for urlk in ("download_url","downloadUrl","url"):
-        url = a.get(urlk)
-        if isinstance(url, str) and "/files/download/" in url:
-            cand = url.rsplit("/", 1)[-1]
-            if GUID_RE.match(cand):
-                return cand, urlk
-    return None, None
+    def _from(d: Dict[str, Any] | None) -> str | None:
+        if not isinstance(d, dict):
+            return None
+        for k in ("file_guid", "fileGuid", "guid"):
+            v = d.get(k)
+            if isinstance(v, str) and GUID_RE.match(v):
+                return v
+        for k in ("download_url", "downloadUrl", "url"):
+            v = d.get(k)
+            if isinstance(v, str) and "/files/download/" in v:
+                cand = v.rsplit("/", 1)[-1]
+                if GUID_RE.match(cand):
+                    return cand
+        return None
 
-def _ts(obj: Dict[str, Any]) -> str:
-    """Метка времени для выбора «последней версии»."""
-    o = _unwrap(obj)
-    return o.get("created") or o.get("created_at") or o.get("createdAt") or o.get("date") or ""
+    return _from(attachment) or _from(attachment.get("file"))
 
 def _safe(s: str) -> str:
     return "".join(ch for ch in s if ch.isalnum() or ch in ("-", "_", ".", " ")).strip().replace(" ", "_")
@@ -73,36 +79,31 @@ def _content_disposition(filename: str) -> Dict[str, str]:
     quoted_utf8 = quote(filename)
     return {"Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quoted_utf8}'}
 
-# --- endpoint -------------------------------------------------------------
 @router.get("/download_files_pyrus")
 def file_by_name(
     task_id: int = Query(..., description="ID задачи Pyrus"),
     filename: str = Query(..., description="Искомое имя файла"),
     match_mode: str = Query("exact", description="exact|contains"),
-    scope: str = Query("top", description="Где искать: top | comments | all"),
-    prefer_latest: bool = Query(True, description="Если exact и имена одинаковы — взять последнюю версию"),
-    fallback_if_empty: bool = Query(True, description="Если scope=top и совпадений нет — дополнительно посмотреть в комментариях"),
-    debug: bool = Query(False, description="Вернуть диагностический JSON вместо скачивания"),
+    debug: bool = Query(False, description="диагностика: показать имена"),
 ):
     """
-    По умолчанию ищем только в правом блоке «ФАЙЛЫ» (task.files + task.attachments).
-    scope=comments — только комментарии; scope=all — и там, и там.
-    Регистронезависимый поиск: exact | contains.
-    Дедуп по GUID. 1 файл → отдаём сам файл (для *.json правильный Content-Type).
+    Ищет вложения в задаче Pyrus по имени:
+    - 0 совпадений → 404 + список доступных имён;
+    - 1 совпадение → отдаём файл (stream), для *.json ставим application/json;
+    - >1 совпадений:
+        * exact и все имена идентичны → отдаём последнюю версию;
+        * иначе → ZIP со всеми совпавшими.
+    Поиск регистронезависимый. Источники: task.files, task.attachments, comments.attachments, comments.files.
     """
     match_mode = (match_mode or "exact").lower()
     if match_mode not in ("exact", "contains"):
         raise HTTPException(400, "match_mode must be 'exact' or 'contains'")
 
-    scope = (scope or "top").lower()
-    if scope not in ("top", "comments", "all"):
-        raise HTTPException(400, "scope must be 'top', 'comments', or 'all'")
-
     q = (filename or "").strip()
     if not q:
         raise HTTPException(400, "filename is empty")
 
-    # 1) Запрашиваем задачу
+    # 1) Получаем задачу с комментариями и файлами
     r = requests.get(f"{BASE}/tasks/{task_id}?include=comments,files",
                      headers=_auth(), timeout=LIST_TIMEOUT)
     if r.status_code >= 400:
@@ -110,105 +111,80 @@ def file_by_name(
     data = r.json() or {}
     task = data.get("task", data)
 
-    # 2) Собираем кандидатов
-    collected: List[Dict[str, Any]] = []
+    files: List[Dict[str, str]] = []
 
-    def _add_from(seq: List[Dict[str, Any]] | None, origin: str):
-        for att in (seq or []):
-            name, name_key = _pick_name(att)
-            guid, guid_key = _pick_guid(att)
+    # 2) Вложения верхнего уровня (правый блок «ФАЙЛЫ»): files + attachments
+    for att in (task.get("files") or []) + (task.get("attachments") or []):
+        name = _pick_name(att)
+        guid = _pick_guid(att)
+        if name and guid:
+            ts = att.get("created") or att.get("created_at") or att.get("createdAt") or att.get("date") or ""
+            files.append({"name": str(name), "guid": str(guid), "ts": ts})
+
+    # 3) Вложения в комментариях: attachments + files
+    for c in (task.get("comments") or []):
+        ts = c.get("created") or c.get("created_at") or c.get("createdAt") or c.get("date") or ""
+        for att in (c.get("attachments") or []) + (c.get("files") or []):
+            name = _pick_name(att)
+            guid = _pick_guid(att)
             if name and guid:
-                collected.append({
-                    "name": name,
-                    "guid": guid,
-                    "ts": _ts(att),
-                    "name_key": name_key,
-                    "guid_key": guid_key,
-                    "src": origin,
-                })
+                files.append({"name": str(name), "guid": str(guid), "ts": ts})
 
-    if scope in ("top", "all"):
-        _add_from(task.get("files"), "task.files")
-        _add_from(task.get("attachments"), "task.attachments")
-
-    if scope in ("comments", "all"):
-        for c in (task.get("comments") or []):
-            _add_from(c.get("attachments"), "comment.attachments")
-            _add_from(c.get("files"), "comment.files")
-
-    # 3) Дедуп по GUID
-    seen, files = set(), []
-    for f in collected:
-        g = f["guid"]
-        if g in seen:
+    # 4) Дедуп по GUID (ключевой фикс против дублей)
+    seen, dedup = set(), []
+    for f in files:
+        g = f.get("guid")
+        if not g or g in seen:
             continue
         seen.add(g)
-        files.append(f)
+        dedup.append(f)
+    files = dedup
 
-    # 4) Диагностика
+    names_all = [f["name"] for f in files]
+
     if debug:
         return {
             "task_id": task_id,
             "requested_filename": filename,
             "match_mode": match_mode,
-            "scope": scope,
-            "count_after_dedup": len(files),
-            "items": files,
-            "task_keys": list(task.keys()),
+            "all_files_count": len(files),
+            "all_files": files,
+            "task_structure_keys": list(task.keys()),
             "comments_count": len(task.get("comments") or []),
-            "top_files_count": len(task.get("files") or []),
-            "top_attachments_count": len(task.get("attachments") or []),
+            "files_count": len(task.get("files") or []),
+            "attachments_count": len(task.get("attachments") or []),
         }
 
     # 5) Поиск по имени
-    names_all = [f["name"] for f in files]
-    qlow = q.lower()
-    matches = [f for f in files if f["name"].lower() == qlow] if match_mode == "exact" \
-        else [f for f in files if qlow in f["name"].lower()]
+    q_low = q.lower()
+    if match_mode == "exact":
+        matches = [f for f in files if f["name"].lower() == q_low]
+    else:
+        matches = [f for f in files if q_low in f["name"].lower()]
 
-    # Если scope=top ничего не нашёл, можно авто-досмотреть комментарии
-    if not matches and scope == "top" and fallback_if_empty:
-        extra: List[Dict[str, Any]] = []
-        for c in (task.get("comments") or []):
-            for key in ("attachments", "files"):
-                for att in (c.get(key) or []):
-                    name, name_key = _pick_name(att)
-                    guid, guid_key = _pick_guid(att)
-                    if name and guid and guid not in {f["guid"] for f in files}:
-                        extra.append({
-                            "name": name, "guid": guid, "ts": _ts(att),
-                            "name_key": name_key, "guid_key": guid_key, "src": f"comment.{key}"
-                        })
-        files += extra
-        names_all = [f["name"] for f in files]
-        matches = [f for f in files if f["name"].lower() == qlow] if match_mode == "exact" \
-            else [f for f in files if qlow in f["name"].lower()]
+    logger.info(f"Found matches: {[m['name'] for m in matches]}")
 
-    logger.info(f"[pyrus] task={task_id} scope={scope} query={filename} matches={len(matches)}")
-
+    # 6) Возврат
     if not matches:
         return JSONResponse(
             status_code=404,
             content={"detail": "file_not_found", "requested": filename, "available_files": names_all},
         )
 
-    # 6) Если один файл — отдаём напрямую (JSON -> правильный Content-Type)
     if len(matches) == 1:
         m = matches[0]
         rr = requests.get(f"{BASE}/files/download/{quote(m['guid'])}",
                           headers=_auth(), stream=True, timeout=READ_TIMEOUT)
         if rr.status_code >= 400:
             raise HTTPException(502, f"Pyrus download error: {rr.text}")
+        # Для JSON заставляем корректный content-type
         ctype = "application/json; charset=utf-8" if m["name"].lower().endswith(".json") \
                 else rr.headers.get("Content-Type", "application/octet-stream")
-        headers = _content_disposition(m["name"])
-        headers["X-Pyrus-Source"]   = m.get("src") or ""
-        headers["X-Pyrus-Name-Key"] = m.get("name_key") or ""
-        headers["X-Pyrus-Guid-Key"] = m.get("guid_key") or ""
-        return StreamingResponse(rr.iter_content(CHUNK), media_type=ctype, headers=headers)
+        return StreamingResponse(rr.iter_content(CHUNK), media_type=ctype,
+                                 headers=_content_disposition(m["name"]))
 
-    # 7) Если exact и имена одинаковы — берём «последнюю» (prefer_latest)
-    if prefer_latest and match_mode == "exact" and len({m["name"].lower() for m in matches}) == 1:
+    # >1 совпадений
+    if match_mode == "exact" and len({m["name"].lower() for m in matches}) == 1:
         last = sorted(matches, key=lambda x: x["ts"] or "")[-1]
         rr = requests.get(f"{BASE}/files/download/{quote(last['guid'])}",
                           headers=_auth(), stream=True, timeout=READ_TIMEOUT)
@@ -219,41 +195,31 @@ def file_by_name(
         headers = _content_disposition(last["name"])
         headers["X-Pyrus-Match-Count"] = str(len(matches))
         headers["X-Pyrus-Selected"] = "latest"
-        headers["X-Pyrus-Source"]   = last.get("src") or ""
-        headers["X-Pyrus-Name-Key"] = last.get("name_key") or ""
-        headers["X-Pyrus-Guid-Key"] = last.get("guid_key") or ""
         return StreamingResponse(rr.iter_content(CHUNK), media_type=ctype, headers=headers)
 
-    # 8) Иначе — ZIP всех совпадений (устойчиво к частичным ошибкам)
+    # Иначе: ZIP всех совпавших
     buf = io.BytesIO()
-    failed = []
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        used_names = set()
+        used = set()
         for m in matches:
             rr = requests.get(f"{BASE}/files/download/{quote(m['guid'])}",
                               headers=_auth(), timeout=READ_TIMEOUT)
             if rr.status_code >= 400:
-                failed.append({"name": m["name"], "guid": m["guid"], "code": rr.status_code})
-                continue
+                raise HTTPException(502, f"Pyrus download error: {rr.text}")
             arc = m["name"]
-            if arc in used_names:
+            if arc in used:
                 base, dot, ext = arc.partition(".")
                 idx = 1
                 n = f"{base} ({idx}){dot}{ext}" if dot else f"{base} ({idx})"
-                while n in used_names:
+                while n in used:
                     idx += 1
                     n = f"{base} ({idx}){dot}{ext}" if dot else f"{base} ({idx})"
                 arc = n
-            used_names.add(arc)
+            used.add(arc)
             zf.writestr(arc, rr.content)
-
-    if not used_names and failed:
-        return JSONResponse(status_code=502, content={"detail": "download_failed", "failed": failed})
 
     buf.seek(0)
     zip_name = f"pyrus_{task_id}_{_safe(q)}_bundle.zip"
     headers = _content_disposition(zip_name)
     headers["X-Pyrus-Match-Count"] = str(len(matches))
-    if failed:
-        headers["X-Pyrus-Failed-Count"] = str(len(failed))
     return StreamingResponse(buf, media_type="application/zip", headers=headers)
