@@ -22,7 +22,6 @@ def _auth() -> Dict[str, str]:
 
 def _pick_name(attachment: Dict[str, Any]) -> str | None:
     """Извлекает имя файла из объекта вложения, учитывая различные форматы Pyrus API"""
-    # Попробуем все возможные варианты имен полей
     possible_names = [
         attachment.get("file_name"),
         attachment.get("fileName"),
@@ -33,8 +32,6 @@ def _pick_name(attachment: Dict[str, Any]) -> str | None:
         attachment.get("original_name"),
         attachment.get("originalName"),
     ]
-    
-    # Если есть вложенный объект file, проверим и его
     file_obj = attachment.get("file")
     if isinstance(file_obj, dict):
         file_names = [
@@ -48,8 +45,6 @@ def _pick_name(attachment: Dict[str, Any]) -> str | None:
             file_obj.get("originalName"),
         ]
         possible_names.extend(file_names)
-    
-    # Вернем первое непустое значение
     for name in possible_names:
         if name:
             return str(name)
@@ -57,7 +52,6 @@ def _pick_name(attachment: Dict[str, Any]) -> str | None:
 
 def _pick_guid(attachment: Dict[str, Any]) -> str | None:
     """Извлекает GUID файла из объекта вложения, учитывая различные форматы Pyrus API"""
-    # Попробуем все возможные варианты GUID
     possible_guids = [
         attachment.get("file_guid"),
         attachment.get("fileGuid"),
@@ -66,8 +60,6 @@ def _pick_guid(attachment: Dict[str, Any]) -> str | None:
         attachment.get("file_id"),
         attachment.get("fileId"),
     ]
-    
-    # Если есть вложенный объект file, проверим и его
     file_obj = attachment.get("file")
     if isinstance(file_obj, dict):
         file_guids = [
@@ -79,8 +71,6 @@ def _pick_guid(attachment: Dict[str, Any]) -> str | None:
             file_obj.get("fileId"),
         ]
         possible_guids.extend(file_guids)
-    
-    # Вернем первое непустое значение
     for guid in possible_guids:
         if guid:
             return str(guid)
@@ -119,18 +109,15 @@ def file_by_name(
         )
         if r.status_code >= 400:
             raise HTTPException(502, f"Pyrus list error: {r.text}")
-        
         data = r.json() or {}
-        # 2) У некоторых ответ завернут: {"task": {...}}
-        task = data.get("task", data)
-        
+        task = data.get("task", data)  # иногда обёртка {"task": {...}}
     except Exception as e:
         logger.error(f"Error fetching task: {e}")
         raise HTTPException(500, f"Error fetching task: {e}")
 
     files: List[Dict[str, str]] = []
 
-    # 3) top-level: учитываем и files, и attachments
+    # 2) Сбор top-level: files + attachments
     for att in (task.get("files") or []) + (task.get("attachments") or []):
         name = _pick_name(att)
         guid = _pick_guid(att)
@@ -140,7 +127,7 @@ def file_by_name(
             files.append({"name": name, "guid": guid, "ts": ts})
             logger.debug(f"Added top-level file: {name}, guid: {guid}")
 
-    # комментарии: attachments и/или files
+    # 3) Сбор из комментариев
     for c in (task.get("comments") or []):
         ts = (c.get("created") or c.get("created_at") or c.get("createdAt")
               or c.get("date") or "")
@@ -151,8 +138,19 @@ def file_by_name(
                 files.append({"name": name, "guid": guid, "ts": ts})
                 logger.debug(f"Added comment file: {name}, guid: {guid}")
 
+    # 3.5) ДЕДУП по GUID (оставляем запись с более свежим ts)
+    files_before = len(files)
+    by_guid: Dict[str, Dict[str, str]] = {}
+    for f in files:
+        g = f["guid"]
+        if g not in by_guid or (f.get("ts") or "") > (by_guid[g].get("ts") or ""):
+            by_guid[g] = f
+    files = list(by_guid.values())
+    logger.debug(f"Dedup by guid: {files_before} -> {len(files)}")
+
+    # для 404-ответа — список имён уже после дедупа
     names_all = [f["name"] for f in files]
-    
+
     # Режим отладки
     if debug:
         return {
@@ -160,41 +158,55 @@ def file_by_name(
             "requested_filename": filename,
             "match_mode": match_mode,
             "all_files_count": len(files),
-            "all_files": [{"name": f["name"], "guid": f["guid"]} for f in files],
+            "all_files": [{"name": f["name"], "guid": f["guid"], "ts": f.get("ts", "")} for f in files],
             "task_structure_keys": list(task.keys()),
             "comments_count": len(task.get("comments", [])),
             "files_count": len(task.get("files", [])),
             "attachments_count": len(task.get("attachments", [])),
         }
 
+    # 4) Фильтрация по режиму сопоставления
     q_low = q.lower()
     if match_mode == "exact":
         matches = [f for f in files if f["name"].lower() == q_low]
     else:
         matches = [f for f in files if q_low in f["name"].lower()]
-    
-    logger.info(f"Found matches: {[m['name'] for m in matches]}")
 
-    # 3) Возврат результата
+    # Доп. дедуп уже в совпадениях (на случай, если где-то выше пропустили)
+    m_before = len(matches)
+    uniq_matches: Dict[str, Dict[str, str]] = {}
+    for m in matches:
+        g = m["guid"]
+        if g not in uniq_matches or (m.get("ts") or "") > (uniq_matches[g].get("ts") or ""):
+            uniq_matches[g] = m
+    matches = list(uniq_matches.values())
+
+    logger.info(f"Found matches (unique): {[m['name'] for m in matches]} (was {m_before})")
+
+    # 5) Возврат результата
     if not matches:
         return JSONResponse(
             status_code=404,
             content={"detail": "file_not_found", "requested": filename, "available_files": names_all},
         )
 
-    # Остальная часть кода без изменений...
+    # Один совпавший файл — возвращаем его напрямую
     if len(matches) == 1:
         m = matches[0]
-        rr = requests.get(f"{BASE}/files/download/{quote(m['guid'])}", headers=_auth(), stream=True, timeout=READ_TIMEOUT)
+        rr = requests.get(f"{BASE}/files/download/{quote(m['guid'])}",
+                          headers=_auth(), stream=True, timeout=READ_TIMEOUT)
         if rr.status_code >= 400:
             raise HTTPException(502, f"Pyrus download error: {rr.text}")
         ctype = rr.headers.get("Content-Type", "application/octet-stream")
-        return StreamingResponse(rr.iter_content(CHUNK), media_type=ctype, headers=_content_disposition(m["name"]))
+        return StreamingResponse(rr.iter_content(CHUNK), media_type=ctype,
+                                 headers=_content_disposition(m["name"]))
 
-    # >1 совпадений
+    # Несколько совпадений
     if match_mode == "exact" and len({m["name"].lower() for m in matches}) == 1:
-        last = sorted(matches, key=lambda x: x["ts"] or "")[-1]
-        rr = requests.get(f"{BASE}/files/download/{quote(last['guid'])}", headers=_auth(), stream=True, timeout=READ_TIMEOUT)
+        # Если имена одинаковые — взять самый свежий
+        last = sorted(matches, key=lambda x: x.get("ts") or "")[-1]
+        rr = requests.get(f"{BASE}/files/download/{quote(last['guid'])}",
+                          headers=_auth(), stream=True, timeout=READ_TIMEOUT)
         if rr.status_code >= 400:
             raise HTTPException(502, f"Pyrus download error: {rr.text}")
         ctype = rr.headers.get("Content-Type", "application/octet-stream")
@@ -203,12 +215,13 @@ def file_by_name(
         headers["X-Pyrus-Selected"] = "latest"
         return StreamingResponse(rr.iter_content(CHUNK), media_type=ctype, headers=headers)
 
-    # ZIP-архив для нескольких файлов
+    # ZIP-архив для нескольких файлов (разные имена/версии)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         used = set()
         for m in matches:
-            rr = requests.get(f"{BASE}/files/download/{quote(m['guid'])}", headers=_auth(), timeout=READ_TIMEOUT)
+            rr = requests.get(f"{BASE}/files/download/{quote(m['guid'])}",
+                              headers=_auth(), timeout=READ_TIMEOUT)
             if rr.status_code >= 400:
                 raise HTTPException(502, f"Pyrus download error: {rr.text}")
             arc = m["name"]
