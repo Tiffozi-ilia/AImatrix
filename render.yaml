@@ -1,5 +1,5 @@
 services:
-  # === Твой FastAPI (Python) ===
+  # === FastAPI (Python) ===
   - type: web
     name: my-fastapi
     env: python
@@ -8,11 +8,10 @@ services:
     plan: starter
     autoDeploy: true
     envVars:
-      # URL Kroki-шлюза ниже (после деплоя заменишь на фактический хост, если нужно)
       - key: KROKI_URL
         value: https://my-kroki.onrender.com
 
-  # === Kroki gateway (Docker, публичный) ===
+  # === Kroki gateway (Docker) ===
   - type: web
     name: my-kroki
     env: docker
@@ -24,17 +23,15 @@ services:
       - port: 8000
         protocol: tcp
     envVars:
-      # Включаем GET-ссылки /plantuml/png/<encoded>
       - key: KROKI_SAFE_MODE
         value: UNSAFE
-      # Подключаем BPMN-компаньон по внутреннему имени сервиса и порту
       - key: KROKI_BPMN_HOST
         value: my-kroki-bpmn
       - key: KROKI_BPMN_PORT
-        value: 8003
+        value: 8000   # будет совпадать с портом сервиса ниже
 
-  # === Kroki BPMN companion (Docker, приватный) ===
-  - type: private_service
+  # === Kroki BPMN companion (Docker) ===
+  - type: web
     name: my-kroki-bpmn
     env: docker
     docker:
@@ -42,5 +39,5 @@ services:
     plan: starter
     autoDeploy: true
     ports:
-      - port: 8003
+      - port: 8000
         protocol: tcp
