@@ -26,6 +26,8 @@ services:
     envVars:
       - key: KROKI_BPMN_HOST
         value: my-kroki-bpmn   # связываем с приватным сервисом
+      - key: KROKI_SAFE_MODE
+        value: UNSAFE          # разрешаем GET-ссылки /plantuml/png/<encoded>
 
   # === Kroki BPMN companion (приватный) ===
   - type: private_service
