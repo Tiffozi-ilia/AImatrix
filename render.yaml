@@ -1,0 +1,40 @@
+services:
+  # === Твой FastAPI сервис ===
+  - type: web
+    name: my-fastapi
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    plan: starter
+    autoDeploy: true
+
+    envVars:
+      - key: KROKI_URL
+        value: https://my-kroki.onrender.com   # сюда FastAPI будет слать диаграммы
+
+  # === Kroki gateway (публичный) ===
+  - type: web
+    name: my-kroki
+    env: docker
+    docker:
+      image: yuzutech/kroki
+    plan: starter
+    autoDeploy: true
+    ports:
+      - port: 8000
+        protocol: tcp
+    envVars:
+      - key: KROKI_BPMN_HOST
+        value: my-kroki-bpmn   # связываем с приватным сервисом
+
+  # === Kroki BPMN companion (приватный) ===
+  - type: private_service
+    name: my-kroki-bpmn
+    env: docker
+    docker:
+      image: yuzutech/kroki-bpmn
+    plan: starter
+    autoDeploy: true
+    ports:
+      - port: 8003
+        protocol: tcp
