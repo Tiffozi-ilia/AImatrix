@@ -1,5 +1,5 @@
 services:
-  # === Твой FastAPI сервис ===
+  # === твой FastAPI ===
   - type: web
     name: my-fastapi
     env: python
@@ -7,12 +7,13 @@ services:
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     plan: starter
     autoDeploy: true
-
     envVars:
       - key: KROKI_URL
-        value: https://my-kroki.onrender.com   # сюда FastAPI будет слать диаграммы
+        value: https://my-kroki.onrender.com     # сюда FastAPI пошлет PlantUML
+      - key: KROKI_BPMN_FALLBACK
+        value: https://kroki.io                  # BPMN берем отсюда (временно)
 
-  # === Kroki gateway (публичный) ===
+  # === Kroki gateway (публичный, только PlantUML GET/POST) ===
   - type: web
     name: my-kroki
     env: docker
@@ -24,19 +25,5 @@ services:
       - port: 8000
         protocol: tcp
     envVars:
-      - key: KROKI_BPMN_HOST
-        value: my-kroki-bpmn   # связываем с приватным сервисом
       - key: KROKI_SAFE_MODE
-        value: UNSAFE          # разрешаем GET-ссылки /plantuml/png/<encoded>
-
-  # === Kroki BPMN companion (приватный) ===
-  - type: private_service
-    name: my-kroki-bpmn
-    env: docker
-    docker:
-      image: yuzutech/kroki-bpmn
-    plan: starter
-    autoDeploy: true
-    ports:
-      - port: 8003
-        protocol: tcp
+        value: UNSAFE          # включает GET-ссылки /plantuml/png/<encoded>
