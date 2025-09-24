@@ -1,5 +1,4 @@
 services:
-  # === FastAPI (Python) ===
   - type: web
     name: my-fastapi
     env: python
@@ -10,34 +9,3 @@ services:
     envVars:
       - key: KROKI_URL
         value: https://my-kroki.onrender.com
-
-  # === Kroki gateway (Docker) ===
-  - type: web
-    name: my-kroki
-    env: docker
-    docker:
-      image: yuzutech/kroki
-    plan: starter
-    autoDeploy: true
-    ports:
-      - port: 8000
-        protocol: tcp
-    envVars:
-      - key: KROKI_SAFE_MODE
-        value: UNSAFE
-      - key: KROKI_BPMN_HOST
-        value: my-kroki-bpmn
-      - key: KROKI_BPMN_PORT
-        value: 8000   # будет совпадать с портом сервиса ниже
-
-  # === Kroki BPMN companion (Docker) ===
-  - type: web
-    name: my-kroki-bpmn
-    env: docker
-    docker:
-      image: yuzutech/kroki-bpmn
-    plan: starter
-    autoDeploy: true
-    ports:
-      - port: 8000
-        protocol: tcp
