@@ -6,13 +6,14 @@ router = APIRouter()
 
 PLANTUML_URL = os.getenv("PLANTUML_URL", "https://my-plantuml.onrender.com").rstrip("/")
 
+
 @router.post("/render_pluntuml")
 def render_plantuml(
     fmt: str,
     code: str = Body(..., embed=True, description="PlantUML code as raw string"),
 ):
     """
-    POST /render/png  или  /render/svg
+    POST /render_pluntuml?fmt=png
     Body: {"code": "@startuml\nAlice -> Bob: Hi\n@enduml"}
     """
     fmt = fmt.lower()
@@ -26,16 +27,20 @@ def render_plantuml(
         resp = requests.post(
             f"{PLANTUML_URL}/{fmt}",
             data=code.encode("utf-8"),
-            headers={"Content-Type": "text/plain"},
+            headers={"Content-Type": "text/plain; charset=utf-8"},
             timeout=20,
         )
     except requests.RequestException as e:
         raise HTTPException(502, detail=f"PlantUML server error: {e}")
 
     if resp.status_code != 200:
-        raise HTTPException(502, detail=resp.text or f"PlantUML returned {resp.status_code}")
+        raise HTTPException(
+            502, detail=resp.text or f"PlantUML returned {resp.status_code}"
+        )
 
-    media_type = (
-        "image/png" if fmt == "png" else "image/svg+xml" if fmt == "svg" else "text/plain"
-    )
-    return Response(content=resp.content, media_type=media_type)
+    if fmt == "png":
+        return Response(content=resp.content, media_type="image/png")
+    elif fmt == "svg":
+        return Response(content=resp.content, media_type="image/svg+xml")
+    else:  # txt
+        return Response(content=resp.text, media_type="text/plain; charset=utf-8")
