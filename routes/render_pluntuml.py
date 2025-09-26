@@ -4,13 +4,13 @@ import os
 
 router = APIRouter()
 
-PLANTUML_URL = os.getenv("PLANTUML_URL", "https://my-pluntuml.onrender.com").rstrip("/")
+PLUNTUML_URL = os.getenv("PLUNTUML_URL", "https://my-pluntuml.onrender.com").rstrip("/")
 
 
 @router.post("/render_pluntuml")
-def render_plantuml(
+def render_pluntuml(
     fmt: str,
-    code: str = Body(..., embed=True, description="PlantUML code as raw string"),
+    code: str = Body(..., embed=True, description="pluntUML code as raw string"),
 ):
     """
     POST /render_pluntuml?fmt=png
@@ -21,21 +21,21 @@ def render_plantuml(
         raise HTTPException(400, detail="format must be png/svg/txt")
 
     if not code.strip():
-        raise HTTPException(400, detail="Empty PlantUML code")
+        raise HTTPException(400, detail="Empty PLUNTUML code")
 
     try:
         resp = requests.post(
-            f"{PLANTUML_URL}/{fmt}",
+            f"{PLUNTUML_URL}/{fmt}",
             data=code.encode("utf-8"),
             headers={"Content-Type": "text/plain; charset=utf-8"},
             timeout=20,
         )
     except requests.RequestException as e:
-        raise HTTPException(502, detail=f"PlantUML server error: {e}")
+        raise HTTPException(502, detail=f"PLUNTUML server error: {e}")
 
     if resp.status_code != 200:
         raise HTTPException(
-            502, detail=resp.text or f"PlantUML returned {resp.status_code}"
+            502, detail=resp.text or f"pluntUML returned {resp.status_code}"
         )
 
     if fmt == "png":
