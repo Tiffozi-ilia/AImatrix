@@ -7,7 +7,6 @@ import os, zlib, logging, requests
 router = APIRouter()
 log = logging.getLogger("plantuml")
 
-# Укажи свой PlantUML сервер; можно без /uml — добавим сами.
 RAW_BASE = os.getenv("PLANTUML_URL", "https://my-pluntuml.onrender.com").strip()
 
 CONNECT_TIMEOUT = 10
@@ -60,6 +59,10 @@ def plantuml_encode(uml: str) -> str:
         i += 3
     return ''.join(out)
 
+def _looks_like_html(text: str) -> bool:
+    t = text.lstrip().lower()
+    return t.startswith("<!doctype") or t.startswith("<html")
+
 def _fetch(fmt: str, encoded: str) -> requests.Response:
     if fmt not in ("png", "svg", "txt"):
         raise HTTPException(400, detail="format must be png/svg/txt")
@@ -71,13 +74,25 @@ def _fetch(fmt: str, encoded: str) -> requests.Response:
     except requests.RequestException as e:
         raise HTTPException(502, detail=f"PlantUML network error: {e}")
 
-    ctype = (r.headers.get("Content-Type") or "").lower()
-    if r.status_code != 200:
+    status = r.status_code
+    ctype = (r.headers.get("Content-Type") or "")
+    log.info("UPSTREAM status=%s content-type=%s len=%s", status, ctype, len(r.content))
+
+    if status != 200:
         preview = (r.text or "")[:ERR_PREVIEW]
-        raise HTTPException(502, detail=f"PlantUML {r.status_code}: {preview}")
-    if "text/html" in ctype:
-        preview = (r.text or "")[:ERR_PREVIEW]
-        raise HTTPException(502, detail=f"Got HTML UI instead of {fmt}. Preview: {preview}")
+        raise HTTPException(502, detail=f"PlantUML {status}: {preview}")
+
+    # Не доверяем только заголовку; проверим реальное тело.
+    # Для txt берём .text (UTF-8), для бинарных оставим bytes.
+    if fmt == "txt":
+        # .text здесь безопасно; если вдруг html — детектим по содержимому
+        if _looks_like_html(r.text):
+            preview = (r.text or "")[:ERR_PREVIEW]
+            raise HTTPException(502, detail=f"Got HTML UI instead of {fmt}. Preview: {preview}")
+    else:
+        # для png/svg не смотрим текстовое тело
+        pass
+
     return r
 
 
@@ -104,6 +119,8 @@ def render_plantuml(
     if fmt == "png":
         return Response(content=resp.content, media_type="image/png")
     elif fmt == "svg":
-        return Response(content=resp.content, media_type=resp.headers.get("Content-Type", "image/svg+xml"))
+        # не полагаемся на апстримный заголовок
+        return Response(content=resp.content, media_type="image/svg+xml")
     else:  # txt
+        # Принудительно ставим корректный текстовый тип
         return Response(content=resp.text, media_type="text/plain; charset=utf-8")
