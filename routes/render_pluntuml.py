@@ -8,7 +8,7 @@ router = APIRouter()
 log = logging.getLogger("plantuml")
 
 # === КОНФИГ, идентичный скрипту ===
-RAW_BASE = os.getenv("PLANTUML_URL", "https://my-pluntuml.onrender.com").strip()
+RAW_BASE = os.getenv("PLANTUML_URL", "https://my-pluntuml.onrender.com/uml").strip()
 
 CONNECT_TIMEOUT = 10
 READ_TIMEOUT = 60
