@@ -3,10 +3,12 @@
 
 from fastapi import APIRouter, HTTPException, Body, Response
 import os, zlib, logging, requests
+from typing import Literal
 
 router = APIRouter()
 log = logging.getLogger("plantuml")
 
+# Можно без /uml — модуль добавит сам
 RAW_BASE = os.getenv("PLANTUML_URL", "https://my-pluntuml.onrender.com").strip()
 
 CONNECT_TIMEOUT = 10
@@ -15,7 +17,7 @@ TIMEOUT = (CONNECT_TIMEOUT, READ_TIMEOUT)
 ERR_PREVIEW = 800
 
 
-# ---------- utils ----------
+# ---------- helpers ----------
 def _ensure_uml_base(base: str) -> str:
     base = base.rstrip("/")
     if not base.endswith("/uml"):
@@ -23,18 +25,13 @@ def _ensure_uml_base(base: str) -> str:
     return base
 
 def _encode6bit(b: int) -> str:
-    if b < 10:  # 0-9
-        return chr(48 + b)
+    if b < 10:   return chr(48 + b)       # 0-9
     b -= 10
-    if b < 26:  # A-Z
-        return chr(65 + b)
+    if b < 26:  return chr(65 + b)        # A-Z
     b -= 26
-    if b < 26:  # a-z
-        return chr(97 + b)
+    if b < 26:  return chr(97 + b)        # a-z
     b -= 26
-    if b == 0:  # -
-        return "-"
-    return "_"   # 63
+    return "-" if b == 0 else "_"         # -, _
 
 def _append3bytes(b1: int, b2: int, b3: int) -> str:
     c1 = (b1 >> 2) & 0x3F
@@ -49,8 +46,7 @@ def plantuml_encode(uml: str) -> str:
     comp = zlib.compressobj(level=9, wbits=-15)
     compressed = comp.compress(data) + comp.flush()
     out = []
-    n = len(compressed)
-    i = 0
+    i, n = 0, len(compressed)
     while i < n:
         b1 = compressed[i]
         b2 = compressed[i + 1] if i + 1 < n else 0
@@ -59,18 +55,24 @@ def plantuml_encode(uml: str) -> str:
         i += 3
     return ''.join(out)
 
-def _looks_like_html(text: str) -> bool:
-    t = text.lstrip().lower()
-    return t.startswith("<!doctype") or t.startswith("<html")
+def _accept_for(fmt: Literal["png","svg","txt"]) -> str:
+    return "image/png" if fmt == "png" else ("image/svg+xml" if fmt == "svg" else "text/plain; charset=utf-8")
 
-def _fetch(fmt: str, encoded: str) -> requests.Response:
-    if fmt not in ("png", "svg", "txt"):
-        raise HTTPException(400, detail="format must be png/svg/txt")
+
+def _fetch(fmt: Literal["png","svg","txt"], encoded: str) -> requests.Response:
     base = _ensure_uml_base(RAW_BASE)
     url = f"{base}/{fmt}/{encoded}"
+    headers = {
+        "Accept": _accept_for(fmt),
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "X-Requested-With": "XMLHttpRequest",
+        "User-Agent": "sotiio-render/1.0",
+    }
+
     log.info("GET %s", url)
     try:
-        r = requests.get(url, timeout=TIMEOUT)
+        r = requests.get(url, headers=headers, timeout=TIMEOUT, allow_redirects=False)
     except requests.RequestException as e:
         raise HTTPException(502, detail=f"PlantUML network error: {e}")
 
@@ -78,49 +80,5 @@ def _fetch(fmt: str, encoded: str) -> requests.Response:
     ctype = (r.headers.get("Content-Type") or "")
     log.info("UPSTREAM status=%s content-type=%s len=%s", status, ctype, len(r.content))
 
-    if status != 200:
-        preview = (r.text or "")[:ERR_PREVIEW]
-        raise HTTPException(502, detail=f"PlantUML {status}: {preview}")
-
-    # Не доверяем только заголовку; проверим реальное тело.
-    # Для txt берём .text (UTF-8), для бинарных оставим bytes.
-    if fmt == "txt":
-        # .text здесь безопасно; если вдруг html — детектим по содержимому
-        if _looks_like_html(r.text):
-            preview = (r.text or "")[:ERR_PREVIEW]
-            raise HTTPException(502, detail=f"Got HTML UI instead of {fmt}. Preview: {preview}")
-    else:
-        # для png/svg не смотрим текстовое тело
-        pass
-
-    return r
-
-
-# ---------- endpoint ----------
-@router.post("/render_pluntuml")
-def render_plantuml(
-    fmt: str,
-    code: str = Body(..., embed=True, description="PlantUML code as raw string"),
-):
-    """
-    POST /render_pluntuml?fmt=png|svg|txt
-    Body: {"code": "@startuml\\nAlice -> Bob: Hi\\n@enduml"}
-    """
-    if not code or not code.strip():
-        raise HTTPException(400, detail="Empty PlantUML code")
-
-    try:
-        encoded = plantuml_encode(code)
-    except Exception as e:
-        raise HTTPException(400, detail=f"Encode error: {e}")
-
-    resp = _fetch(fmt, encoded)
-
-    if fmt == "png":
-        return Response(content=resp.content, media_type="image/png")
-    elif fmt == "svg":
-        # не полагаемся на апстримный заголовок
-        return Response(content=resp.content, media_type="image/svg+xml")
-    else:  # txt
-        # Принудительно ставим корректный текстовый тип
-        return Response(content=resp.text, media_type="text/plain; charset=utf-8")
+    # если вдруг редирект — добираем теми же заголовками
+    if status in (30
