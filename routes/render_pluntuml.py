@@ -4,7 +4,7 @@ import os
 
 router = APIRouter()
 
-PLANTUML_URL = os.getenv("PLANTUML_URL", "https://my-plantuml.onrender.com").rstrip("/")
+PLANTUML_URL = os.getenv("PLANTUML_URL", "https://my-pluntuml.onrender.com").rstrip("/")
 
 
 @router.post("/render_pluntuml")
