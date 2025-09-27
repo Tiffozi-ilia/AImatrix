@@ -3,44 +3,43 @@
 
 from fastapi import APIRouter, HTTPException, Body, Response
 import os, zlib, logging, requests, re
-from typing import Literal, Optional
+from typing import Literal, Optional, Dict, Tuple
 from urllib.parse import urljoin, urlparse
 
 router = APIRouter()
 log = logging.getLogger("plantuml")
 
-# Базовые адреса (можно без /uml — код сам попробует оба варианта)
+# Базовые адреса
 PLANTUML_URL = os.getenv("PLANTUML_URL", "https://my-pluntuml.onrender.com").strip().rstrip("/")
-PLANTUML_ALT_URL = os.getenv("PLANTUML_ALT_URL", "").strip().rstrip("/")  # опция
-KROKI_URL = os.getenv("KROKI_URL", "").strip().rstrip("/")                # опция (напр., https://kroki.io)
+PLANTUML_ALT_URL = os.getenv("PLANTUML_ALT_URL", "").strip().rstrip("/")
+KROKI_URL = os.getenv("KROKI_URL", "").strip().rstrip("/")
 
 CONNECT_TIMEOUT = 10
-READ_TIMEOUT = 60
+READ_TIMEOUT   = 60
 TIMEOUT = (CONNECT_TIMEOUT, READ_TIMEOUT)
 
-# Предпочитать контекстный путь /uml первее (судя по логам у тебя он стабильнее)
-PREFER_CTX = True
+# Всегда работаем только под /uml (устраняем 400 без /uml)
+ONLY_CTX = True
+
+# Кеш удачных маршрутов на процесс: fmt -> base
+_ROUTE_CACHE: Dict[str, str] = {}
 
 # ---------- helpers ----------
 
 def _accept_for(fmt: Literal["png","svg","txt"]) -> str:
-    # некоторые PlantUML сборки странно реагируют на узкий Accept, ставим */*
-    return "*/*"
+    return "*/*"  # некоторые инстансы капризничают на узкие Accept
 
-def _ensure_with_ctx(base: str, ctx: bool) -> str:
+def _ensure_with_ctx(base: str) -> str:
     if not base:
         return ""
-    if ctx:
-        return base if base.endswith("/uml") else base + "/uml"
-    else:
-        return base[:-4] if base.endswith("/uml") else base
+    return base if base.endswith("/uml") else base + "/uml"
 
 def _encode6bit(b: int) -> str:
-    if b < 10:  return chr(48 + b)   # 0-9
+    if b < 10:  return chr(48 + b)
     b -= 10
-    if b < 26: return chr(65 + b)   # A-Z
+    if b < 26: return chr(65 + b)
     b -= 26
-    if b < 26: return chr(97 + b)   # a-z
+    if b < 26: return chr(97 + b)
     b -= 26
     return "-" if b == 0 else "_"
 
@@ -67,20 +66,11 @@ def plantuml_encode(uml: str) -> str:
     return ''.join(out)
 
 def _normalize_code(code: str) -> str:
-    """
-    Нормализация:
-    - Если есть @startuml и @enduml — не трогаем
-    - Если только @startuml — добавляем @enduml
-    - Если есть @startX (mindmap, wbs и т.п.) — не трогаем
-    - Иначе оборачиваем в @startuml/@enduml
-    """
     s = code.strip()
     if not s:
         return s
-
     has_startuml = "@startuml" in s.lower()
-    has_enduml = "@enduml" in s.lower()
-
+    has_enduml   = "@enduml" in s.lower()
     if has_startuml and has_enduml:
         return s
     if has_startuml and not has_enduml:
@@ -106,7 +96,6 @@ def _build_headers(fmt: Literal["png","svg","txt"]) -> dict:
     }
 
 def _unescape_backslashes(s: str) -> str:
-    # превратим JSON-экранированные последовательности в реальные символы
     return (
         s.replace("\\r\\n", "\n")
          .replace("\\n", "\n")
@@ -114,11 +103,18 @@ def _unescape_backslashes(s: str) -> str:
          .replace("\\r", "\n")
     )
 
-def _try_get_raw(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], encoded: str) -> Optional[requests.Response]:
-    if not base:
-        return None
-    root = _ensure_with_ctx(base, use_ctx)
-    url = f"{root}/{fmt}/{encoded}"
+def _bases_ctx() -> Tuple[str, ...]:
+    cand = []
+    for b in (PLANTUML_URL, PLANTUML_ALT_URL):
+        if not b:
+            continue
+        cand.append(_ensure_with_ctx(b))
+    # Удаляем дубли при одинаковых PLANTUML_URL/ALT
+    dedup = tuple(dict.fromkeys(cand).keys())
+    return dedup
+
+def _try_get_raw(root_ctx: str, fmt: Literal["png","svg","txt"], encoded: str) -> Optional[requests.Response]:
+    url = f"{root_ctx}/{fmt}/{encoded}"
     headers = _build_headers(fmt)
     log.info("GET %s", url)
     try:
@@ -131,7 +127,6 @@ def _try_get_raw(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], enco
     log.info("UPSTREAM status=%s content-type=%s len=%s",
              status, (r.headers.get("Content-Type") or ""), len(r.content))
 
-    # 3xx follow once
     if status in (301, 302, 303, 307, 308) and r.headers.get("Location"):
         redir = urljoin(url, r.headers["Location"])
         log.info("FOLLOW REDIRECT to %s", redir)
@@ -152,11 +147,8 @@ def _try_get_raw(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], enco
         return None
     return r
 
-def _try_post_then_follow(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], code: str) -> Optional[requests.Response]:
-    if not base:
-        return None
-    root = _ensure_with_ctx(base, use_ctx)
-    post_url = f"{root}/{fmt}"
+def _try_post_then_follow(root_ctx: str, fmt: Literal["png","svg","txt"], code: str) -> Optional[requests.Response]:
+    post_url = f"{root_ctx}/{fmt}"
     headers = {
         "Content-Type": "text/plain; charset=utf-8",
         "Accept": _accept_for(fmt),
@@ -185,10 +177,7 @@ def _try_post_then_follow(base: str, use_ctx: bool, fmt: Literal["png","svg","tx
     parsed = urlparse(abs_loc)
     path = parsed.path
     marker = "/uml/"
-    if marker in path:
-        tail = path.split(marker, 1)[1]
-    else:
-        tail = path[1:] if path.startswith("/") else path
+    tail = path.split(marker, 1)[1] if marker in path else (path[1:] if path.startswith("/") else path)
 
     if "/" in tail:
         head, maybe_id = tail.split("/", 1)
@@ -196,7 +185,7 @@ def _try_post_then_follow(base: str, use_ctx: bool, fmt: Literal["png","svg","tx
     else:
         id_part = tail
 
-    get_url = f"{root}/{fmt}/{id_part}"
+    get_url = f"{root_ctx}/{fmt}/{id_part}"
     log.info("FOLLOW as GET %s", get_url)
     try:
         r = requests.get(get_url, headers=_build_headers(fmt), timeout=TIMEOUT, allow_redirects=False)
@@ -256,59 +245,59 @@ def render_plantuml(
     if not code or not code.strip():
         raise HTTPException(400, detail="Empty PlantUML code")
 
-    # Превращаем JSON-экранированные \\n и пр. в реальные символы
     raw = _unescape_backslashes(code)
-    log.info("CODE len=%d head=%r", len(raw), raw[:120].replace("\n", "\\n"))
-
+    log.info("CODE len=%d head=%r", len(raw), raw[:140].replace("\n", "\\n"))
     normalized = _normalize_code(raw)
 
-    # Спец-ветка: txt делаем ТОЛЬКО через GET /{fmt}/{encoded}
+    # Собираем кандидаты base (только /uml)
+    bases = _bases_ctx()
+    # Если есть кеш для формата — ставим его первым
+    cached = _ROUTE_CACHE.get(fmt)
+    if cached:
+        bases = tuple([cached] + [b for b in bases if b != cached])
+
+    # txt: только GET /uml/txt/{encoded}
     if fmt == "txt":
         try:
             encoded = plantuml_encode(normalized)
         except Exception as e:
             raise HTTPException(400, detail=f"Encode error: {e}")
-        order = [True, False] if PREFER_CTX else [False, True]
-        for use_ctx in order:
-            for base in filter(None, [PLANTUML_URL, PLANTUML_ALT_URL]):
-                r = _try_get_raw(base, use_ctx, fmt, encoded)
-                if r is not None and not _is_html_response(r):
-                    return _finish(fmt, r)
-
-        # Фолбэк Kroki
-        r = _try_kroki(fmt, normalized)
-        if r is not None and not _is_html_response(r):
-            return _finish(fmt, r)
-
-        raise HTTPException(502, detail="PlantUML txt failed via GET and Kroki.")
-
-    # Обычная ветка: PNG/SVG — сначала POST (надёжнее для больших диаграмм)
-    # Порядок: сперва с /uml, потом без (или наоборот — см. PREFER_CTX)
-    order = [True, False] if PREFER_CTX else [False, True]
-    for use_ctx in order:
-        for base in filter(None, [PLANTUML_URL, PLANTUML_ALT_URL]):
-            r = _try_post_then_follow(base, use_ctx, fmt, normalized)
-            if r is not None and not _is_html_response(r):
+        for root in bases:
+            r = _try_get_raw(root, fmt, encoded)
+            if r is not None:
+                _ROUTE_CACHE[fmt] = root
                 return _finish(fmt, r)
 
-    # Затем GET /{fmt}/{encoded} как запасной вариант
+        # Kroki-фолбэк
+        r = _try_kroki(fmt, normalized)
+        if r is not None:
+            return _finish(fmt, r)
+
+        raise HTTPException(502, detail="PlantUML txt failed via GET(/uml) and Kroki.")
+
+    # png/svg: сначала POST /uml/{fmt}, затем GET /uml/{fmt}/{encoded}
+    for root in bases:
+        r = _try_post_then_follow(root, fmt, normalized)
+        if r is not None:
+            _ROUTE_CACHE[fmt] = root
+            return _finish(fmt, r)
+
     try:
         encoded = plantuml_encode(normalized)
     except Exception as e:
         raise HTTPException(400, detail=f"Encode error: {e}")
 
-    for use_ctx in order:
-        for base in filter(None, [PLANTUML_URL, PLANTUML_ALT_URL]):
-            r = _try_get_raw(base, use_ctx, fmt, encoded)
-            if r is not None and not _is_html_response(r):
-                return _finish(fmt, r)
+    for root in bases:
+        r = _try_get_raw(root, fmt, encoded)
+        if r is not None:
+            _ROUTE_CACHE[fmt] = root
+            return _finish(fmt, r)
 
-    # И последний шанс — Kroki
     r = _try_kroki(fmt, normalized)
-    if r is not None and not _is_html_response(r):
+    if r is not None:
         return _finish(fmt, r)
 
     raise HTTPException(
         502,
-        detail="Upstream returned HTML UI or non-image for all attempts. Проверь /uml роутинг или укажи KROKI_URL.",
+        detail="Upstream returned HTML UI or non-image for all attempts under /uml. Проверь KROKI_URL или инстанс PlantUML.",
     )
