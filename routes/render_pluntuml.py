@@ -9,7 +9,7 @@ from urllib.parse import urljoin, urlparse
 router = APIRouter()
 log = logging.getLogger("plantuml")
 
-# Базовые адреса
+# Базовые адреса (можно без /uml — код сам попробует оба варианта)
 PLANTUML_URL = os.getenv("PLANTUML_URL", "https://my-pluntuml.onrender.com").strip().rstrip("/")
 PLANTUML_ALT_URL = os.getenv("PLANTUML_ALT_URL", "").strip().rstrip("/")  # опция
 KROKI_URL = os.getenv("KROKI_URL", "").strip().rstrip("/")                # опция (напр., https://kroki.io)
@@ -17,8 +17,10 @@ KROKI_URL = os.getenv("KROKI_URL", "").strip().rstrip("/")                # оп
 CONNECT_TIMEOUT = 10
 READ_TIMEOUT = 60
 TIMEOUT = (CONNECT_TIMEOUT, READ_TIMEOUT)
+ERR_PREVIEW = 800
 
 # ---------- helpers ----------
+START_RE = re.compile(r"(?im)^\s*@start([a-z0-9_+-]+)\b")
 def _accept_for(fmt: Literal["png","svg","txt"]) -> str:
     return "image/png" if fmt == "png" else ("image/svg+xml" if fmt == "svg" else "text/plain; charset=utf-8")
 
@@ -62,11 +64,20 @@ def plantuml_encode(uml: str) -> str:
     return ''.join(out)
 
 def _normalize_code(code: str) -> str:
-    """
-    Минимальная нормализация - только трим пробелов.
-    Сложные диаграммы с skinparam, ref, alt и т.д. отправляем как есть.
-    """
-    return code.strip()
+    """Гарантируем валидную диаграмму: добавим/закроем маркеры при необходимости."""
+    s = code.strip()
+    if not s:
+        return s
+    m = START_RE.search(s)
+    if m:
+        kind = m.group(1)  # uml, mindmap, wbs, etc.
+        end_re = re.compile(rf"(?im)^\s*@end{re.escape(kind)}\b")
+        if end_re.search(s):
+            return s
+        # есть @startX, нет конца — добавим
+        return s + f"\n@end{kind}"
+    # нет стартового маркера — обернём в @startuml/@enduml
+    return f"@startuml\n{s}\n@enduml"
 
 def _looks_like_html_text(s: str) -> bool:
     t = s.lstrip().lower()
@@ -114,7 +125,7 @@ def _try_get_raw(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], enco
         return None
     if fmt == "txt" and _looks_like_html_text(r.text):
         return None
-    return r
+    return r  # для png/svg не доверяем Content-Type — просто берём bytes
 
 def _try_post_then_follow(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], code: str) -> Optional[requests.Response]:
     if not base:
@@ -205,24 +216,23 @@ def render_plantuml(
 ):
     """
     POST /render_pluntuml?fmt=png|svg|txt
-    Body: {"code": "@startuml\\nAlice -> Bob: Hi\\n@enduml"}
+    Body: {"code": "@startuml\\nAlice -> Bob: Hi\\n@enduml"}  # маркеры можно опустить — мы добавим
     """
     if not code or not code.strip():
         raise HTTPException(400, detail="Empty PlantUML code")
 
-    log.info("ORIGINAL CODE len=%d head=%r", len(code), repr(code[:200]))
-    
-    # Минимальная нормализация - только трим
+    # Лог для отладки входа
+    log.info("CODE len=%d head=%r", len(code), code[:120].replace("\n", "\\n"))
+
+    # 0) Нормализуем: добавим маркеры при необходимости/закроем незакрытый @endX
     normalized = _normalize_code(code)
-    
-    log.info("NORMALIZED CODE len=%d head=%r", len(normalized), repr(normalized[:200]))
 
     try:
         encoded = plantuml_encode(normalized)
     except Exception as e:
         raise HTTPException(400, detail=f"Encode error: {e}")
 
-    # 1) GET raw: сначала БЕЗ /uml, затем С /uml
+    # 1) GET raw: сначала БЕЗ /uml, затем С /uml (так быстрее обходим UI-серверы)
     for base in filter(None, [PLANTUML_URL, PLANTUML_ALT_URL]):
         r = _try_get_raw(base, False, fmt, encoded)   # без /uml
         if r is not None:
