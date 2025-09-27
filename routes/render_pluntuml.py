@@ -11,8 +11,7 @@ log = logging.getLogger("plantuml")
 
 # Базовые адреса (можно без /uml — код сам попробует оба варианта)
 PLANTUML_URL = os.getenv("PLANTUML_URL", "https://my-pluntuml.onrender.com/uml").strip().rstrip("/")
-PLANTUML_ALT_URL = os.getenv("PLANTUML_ALT_URL", "").strip().rstrip("/")  # опция
-KROKI_URL = os.getenv("KROKI_URL", "").strip().rstrip("/")                # опция (напр., https://kroki.io)
+PLANTUML_ALT_URL = os.getenv("PLANTUML_ALT_URL", "").strip().rstrip("/")
 
 CONNECT_TIMEOUT = 10
 READ_TIMEOUT = 60
@@ -261,29 +260,6 @@ def _try_post_then_follow(base: str, use_ctx: bool, fmt: Literal["png","svg","tx
     # Иное — неуспех
     return None
 
-def _try_kroki(fmt: Literal["png","svg","txt"], code: str) -> Optional[requests.Response]:
-    if not KROKI_URL:
-        return None
-    url = f"{KROKI_URL}/plantuml/{fmt}"
-    headers = {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Accept": _accept_for(fmt),
-        "User-Agent": "sotiio-render/1.0",
-    }
-    log.info("KROKI POST %s (len=%d)", url, len(code))
-    try:
-        r = requests.post(url, data=code.encode("utf-8"), headers=headers, timeout=TIMEOUT)
-    except requests.RequestException as e:
-        log.info("KROKI error (%s): %s", url, e)
-        return None
-    if r.status_code != 200:
-        return None
-    if fmt == "txt" and _looks_like_html_text(r.text):
-        return None
-    if _is_html_response(r):
-        return None
-    return r
-
 def _finish(fmt: Literal["png","svg","txt"], resp: requests.Response) -> Response:
     if fmt == "png":
         return Response(content=resp.content, media_type="image/png")
@@ -336,15 +312,11 @@ def render_plantuml(
         if r is not None and not _is_html_response(r):
             return _finish(fmt, r)
 
-    # 4) Фолбэк Kroki
-    r = _try_kroki(fmt, normalized)
-    if r is not None and not _is_html_response(r):
-        return _finish(fmt, r)
-
+    # 4) Фолбэков нет — только твой локальный PlantUML
     raise HTTPException(
         502,
         detail=(
             "Upstream returned HTML UI or non-image for all attempts. "
-            "Проверь маршрутизацию PlantUML (включая /uml) или укажи KROKI_URL."
+            "Проверь маршрутизацию PlantUML (включая /uml)."
         ),
     )
