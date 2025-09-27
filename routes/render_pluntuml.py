@@ -178,41 +178,43 @@ def _try_post_then_follow(base: str, use_ctx: bool, fmt: Literal["png","svg","tx
             return None
         return resp
 
-    # Если редирект, пытаемся забрать диаграмму GET-ом по итоговому URL
-    if resp.status_code not in (301, 302, 303) or not resp.headers.get("Location"):
-        return None
+    # Расширенный набор ответов, которые считаем "редиректом по Location"
+    redirect_like = (301, 302, 303, 307, 308, 201, 202)
+    if resp.status_code in redirect_like and resp.headers.get("Location"):
+        loc = resp.headers["Location"]
+        abs_loc = urljoin(post_url, loc)
+        parsed = urlparse(abs_loc)
+        path = parsed.path
+        marker = "/uml/"
+        if marker in path:
+            tail = path.split(marker, 1)[1]
+        else:
+            tail = path[1:] if path.startswith("/") else path
 
-    loc = resp.headers["Location"]
-    abs_loc = urljoin(post_url, loc)
-    parsed = urlparse(abs_loc)
-    path = parsed.path
-    marker = "/uml/"
-    if marker in path:
-        tail = path.split(marker, 1)[1]
-    else:
-        tail = path[1:] if path.startswith("/") else path
+        if "/" in tail:
+            head, maybe_id = tail.split("/", 1)
+            id_part = maybe_id if head in ("png", "svg", "txt") else tail
+        else:
+            id_part = tail
 
-    if "/" in tail:
-        head, maybe_id = tail.split("/", 1)
-        id_part = maybe_id if head in ("png", "svg", "txt") else tail
-    else:
-        id_part = tail
+        get_url = f"{root}/{fmt}/{id_part}"
+        log.info("FOLLOW as GET %s", get_url)
+        try:
+            r = requests.get(get_url, headers=_build_headers(fmt), timeout=TIMEOUT, allow_redirects=False)
+        except requests.RequestException as e:
+            log.info("GET after POST error (%s): %s", get_url, e)
+            return None
 
-    get_url = f"{root}/{fmt}/{id_part}"
-    log.info("FOLLOW as GET %s", get_url)
-    try:
-        r = requests.get(get_url, headers=_build_headers(fmt), timeout=TIMEOUT, allow_redirects=False)
-    except requests.RequestException as e:
-        log.info("GET after POST error (%s): %s", get_url, e)
-        return None
+        if r.status_code != 200:
+            return None
+        if fmt == "txt" and _looks_like_html_text(r.text):
+            return None
+        if _is_html_response(r):
+            return None
+        return r
 
-    if r.status_code != 200:
-        return None
-    if fmt == "txt" and _looks_like_html_text(r.text):
-        return None
-    if _is_html_response(r):
-        return None
-    return r
+    # Любой иной ответ считаем неуспешным для этой попытки
+    return None
 
 def _try_kroki(fmt: Literal["png","svg","txt"], code: str) -> Optional[requests.Response]:
     if not KROKI_URL:
