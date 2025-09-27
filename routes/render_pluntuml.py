@@ -92,10 +92,6 @@ def _looks_like_html_text(s: str) -> bool:
     t = s.lstrip().lower()
     return t.startswith("<!doctype") or t.startswith("<html")
 
-def _is_html_response(resp: requests.Response) -> bool:
-    ct = (resp.headers.get("Content-Type") or "").lower()
-    return "text/html" in ct
-
 def _build_headers(fmt: Literal["png","svg","txt"]) -> dict:
     return {
         "Accept": _accept_for(fmt),
@@ -138,8 +134,6 @@ def _try_get_raw(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], enco
         return None
     if fmt == "txt" and _looks_like_html_text(r.text):
         return None
-    if _is_html_response(r):  # ← ВАЖНО: проверяем HTML!
-        return None
     return r
 
 def _try_post_then_follow(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], code: str) -> Optional[requests.Response]:
@@ -162,8 +156,7 @@ def _try_post_then_follow(base: str, use_ctx: bool, fmt: Literal["png","svg","tx
     if resp.status_code not in (301, 302, 303) or not resp.headers.get("Location"):
         if resp.status_code == 200:
             if fmt != "txt" or not _looks_like_html_text(resp.text):
-                if not _is_html_response(resp):  # ← ВАЖНО: проверяем HTML!
-                    return resp
+                return resp
         return None
 
     loc = resp.headers["Location"]
@@ -194,8 +187,6 @@ def _try_post_then_follow(base: str, use_ctx: bool, fmt: Literal["png","svg","tx
         return None
     if fmt == "txt" and _looks_like_html_text(r.text):
         return None
-    if _is_html_response(r):  # ← ВАЖНО: проверяем HTML!
-        return None
     return r
 
 def _try_kroki(fmt: Literal["png","svg","txt"], code: str) -> Optional[requests.Response]:
@@ -216,8 +207,6 @@ def _try_kroki(fmt: Literal["png","svg","txt"], code: str) -> Optional[requests.
     if r.status_code != 200:
         return None
     if fmt == "txt" and _looks_like_html_text(r.text):
-        return None
-    if _is_html_response(r):  # ← ВАЖНО: проверяем HTML!
         return None
     return r
 
@@ -241,10 +230,14 @@ def render_plantuml(
     if not code or not code.strip():
         raise HTTPException(400, detail="Empty PlantUML code")
 
-    log.info("CODE len=%d head=%r", len(code), code[:120].replace("\n", "\\n"))
+    # ЕДИНСТВЕННОЕ ИСПРАВЛЕНИЕ: убрана функция _unescape_backslashes
+    # FastAPI автоматически разэкранирует JSON, поэтому code уже содержит нормальные \n
+    raw = code
+
+    log.info("CODE len=%d head=%r", len(raw), raw[:120].replace("\n", "\\n"))
 
     # Упрощенная нормализация - только базовые случаи
-    normalized = _normalize_code(code)
+    normalized = _normalize_code(raw)
 
     try:
         encoded = plantuml_encode(normalized)
