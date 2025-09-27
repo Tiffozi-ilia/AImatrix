@@ -4,40 +4,31 @@
 from fastapi import APIRouter, HTTPException, Body, Response
 import os, zlib, logging, requests, re
 from typing import Literal, Optional
+from urllib.parse import urljoin, urlparse
 
 router = APIRouter()
 log = logging.getLogger("plantuml")
 
-# ===== Конфиг =====
-# Базовый адрес PlantUML-сервера БЕЗ /uml — мы добавляем его сами.
-PLANTUML_URL = os.getenv("PLANTUML_URL", "https://my-pluntuml.onrender.com").strip().rstrip("/")
-PLANTUML_ALT_URL = os.getenv("PLANTUML_ALT_URL", "").strip().rstrip("/")  # опционально
+# Базовые адреса (можно без /uml — код сам попробует оба варианта)
+PLANTUML_URL = os.getenv("PLANTUML_URL", "https://my-pluntuml.onrender.com/uml").strip().rstrip("/")
+PLANTUML_ALT_URL = os.getenv("PLANTUML_ALT_URL", "").strip().rstrip("/")
 
 CONNECT_TIMEOUT = 10
 READ_TIMEOUT = 60
 TIMEOUT = (CONNECT_TIMEOUT, READ_TIMEOUT)
 
-# ===== Helpers =====
+# ---------- helpers ----------
 
 def _accept_for(fmt: Literal["png","svg","txt"]) -> str:
-    if fmt == "png":
-        return "image/png"
-    if fmt == "svg":
-        return "image/svg+xml"
-    return "text/plain; charset=utf-8"
+    return "image/png" if fmt == "png" else ("image/svg+xml" if fmt == "svg" else "text/plain; charset=utf-8")
 
-def _build_headers(fmt: Literal["png","svg","txt"]) -> dict:
-    return {
-        "Accept": _accept_for(fmt),
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-        "X-Requested-With": "XMLHttpRequest",
-        "User-Agent": "sotiio-render/1.0",
-    }
-
-def _is_html_response(resp: requests.Response) -> bool:
-    ct = (resp.headers.get("Content-Type") or "").lower()
-    return "text/html" in ct
+def _ensure_with_ctx(base: str, ctx: bool) -> str:
+    if not base:
+        return ""
+    if ctx:
+        return base if base.endswith("/uml") else base + "/uml"
+    else:
+        return base[:-4] if base.endswith("/uml") else base
 
 def _encode6bit(b: int) -> str:
     if b < 10:  return chr(48 + b)   # 0-9
@@ -57,7 +48,7 @@ def _append3bytes(b1: int, b2: int, b3: int) -> str:
 
 def plantuml_encode(uml: str) -> str:
     data = uml.encode("utf-8")
-    comp = zlib.compressobj(level=9, wbits=-15)  # raw DEFLATE (без zlib header)
+    comp = zlib.compressobj(level=9, wbits=-15)  # raw deflate
     compressed = comp.compress(data) + comp.flush()
     out = []
     i = 0
@@ -92,6 +83,23 @@ def _normalize_code(code: str) -> str:
         return s
     return f"@startuml\n{s}\n@enduml"
 
+def _looks_like_html_text(s: str) -> bool:
+    t = s.lstrip().lower()
+    return t.startswith("<!doctype") or t.startswith("<html")
+
+def _is_html_response(resp: requests.Response) -> bool:
+    ct = (resp.headers.get("Content-Type") or "").lower()
+    return "text/html" in ct
+
+def _build_headers(fmt: Literal["png","svg","txt"]) -> dict:
+    return {
+        "Accept": _accept_for(fmt),
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "X-Requested-With": "XMLHttpRequest",
+        "User-Agent": "sotiio-render/1.0",
+    }
+
 def _unescape_backslashes(s: str) -> str:
     """
     Разэкранируем \\r\\n, \\n, \\r, \\t ТОЛЬКО ВНЕ двойных кавычек.
@@ -104,8 +112,9 @@ def _unescape_backslashes(s: str) -> str:
     while i < n:
         ch = s[i]
 
-        # вход/выход из строки с учётом экранирования кавычек
+        # отслеживаем вход/выход из строки с учётом экранирования кавычек
         if ch == '"':
+            # считаем количество обратных слэшей перед кавычкой
             bs = 0
             j = i - 1
             while j >= 0 and s[j] == '\\':
@@ -145,17 +154,111 @@ def _unescape_backslashes(s: str) -> str:
             i += 1
             continue
 
+        # по умолчанию — копируем символ
         out.append(ch)
         i += 1
 
     return ''.join(out)
 
-def _strip_invisibles(s: str) -> str:
-    """Убираем BOM/ZWSP/LRM/RLM — иногда прилетают при копипасте."""
-    return (s.replace('\ufeff', '')
-             .replace('\u200b', '')
-             .replace('\u200e', '')
-             .replace('\u200f', ''))
+def _try_get_raw(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], encoded: str) -> Optional[requests.Response]:
+    if not base:
+        return None
+    root = _ensure_with_ctx(base, use_ctx)
+    url = f"{root}/{fmt}/{encoded}"
+    headers = _build_headers(fmt)
+    log.info("GET %s", url)
+    try:
+        r = requests.get(url, headers=headers, timeout=TIMEOUT, allow_redirects=False)
+    except requests.RequestException as e:
+        log.info("GET error (%s): %s", url, e)
+        return None
+
+    status = r.status_code
+    ctype = (r.headers.get("Content-Type") or "")
+    log.info("UPSTREAM status=%s content-type=%s len=%s", status, ctype, len(r.content))
+
+    if status in (301, 302, 303, 307, 308) and r.headers.get("Location"):
+        redir = urljoin(url, r.headers["Location"])
+        log.info("FOLLOW REDIRECT to %s", redir)
+        try:
+            r = requests.get(redir, headers=headers, timeout=TIMEOUT, allow_redirects=False)
+            status = r.status_code
+            ctype = (r.headers.get("Content-Type") or "")
+            log.info("UPSTREAM(redirect) status=%s content-type=%s len=%s", status, ctype, len(r.content))
+        except requests.RequestException as e:
+            log.info("Redirect GET error (%s): %s", redir, e)
+            return None
+
+    if status != 200:
+        return None
+    if fmt == "txt" and _looks_like_html_text(r.text):
+        return None
+    if _is_html_response(r):
+        return None
+    return r
+
+def _try_post_then_follow(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], code: str) -> Optional[requests.Response]:
+    if not base:
+        return None
+    root = _ensure_with_ctx(base, use_ctx)
+    post_url = f"{root}/{fmt}"
+    headers = {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Accept": _accept_for(fmt),
+        "User-Agent": "sotiio-render/1.0",
+    }
+    log.info("POST %s (len=%d)", post_url, len(code))
+    try:
+        resp = requests.post(post_url, data=code.encode("utf-8"), headers=headers, timeout=TIMEOUT, allow_redirects=False)
+    except requests.RequestException as e:
+        log.info("POST error (%s): %s", post_url, e)
+        return None
+
+    # Прямой 200 — проверяем, что это не HTML
+    if resp.status_code == 200:
+        if fmt == "txt" and _looks_like_html_text(resp.text):
+            return None
+        if _is_html_response(resp):
+            return None
+        return resp
+
+    # Принимаем редирект-подобные ответы: 301/302/303/307/308 и 201/202 с Location
+    redirect_like = (301, 302, 303, 307, 308, 201, 202)
+    if resp.status_code in redirect_like and resp.headers.get("Location"):
+        loc = resp.headers["Location"]
+        abs_loc = urljoin(post_url, loc)
+        parsed = urlparse(abs_loc)
+        path = parsed.path
+        marker = "/uml/"
+        if marker in path:
+            tail = path.split(marker, 1)[1]
+        else:
+            tail = path[1:] if path.startswith("/") else path
+
+        if "/" in tail:
+            head, maybe_id = tail.split("/", 1)
+            id_part = maybe_id if head in ("png", "svg", "txt") else tail
+        else:
+            id_part = tail
+
+        get_url = f"{root}/{fmt}/{id_part}"
+        log.info("FOLLOW as GET %s", get_url)
+        try:
+            r = requests.get(get_url, headers=_build_headers(fmt), timeout=TIMEOUT, allow_redirects=False)
+        except requests.RequestException as e:
+            log.info("GET after POST error (%s): %s", get_url, e)
+            return None
+
+        if r.status_code != 200:
+            return None
+        if fmt == "txt" and _looks_like_html_text(r.text):
+            return None
+        if _is_html_response(r):
+            return None
+        return r
+
+    # Иное — неуспех
+    return None
 
 def _finish(fmt: Literal["png","svg","txt"], resp: requests.Response) -> Response:
     if fmt == "png":
@@ -164,53 +267,7 @@ def _finish(fmt: Literal["png","svg","txt"], resp: requests.Response) -> Respons
         return Response(content=resp.content, media_type="image/svg+xml")
     return Response(content=resp.text, media_type="text/plain; charset=utf-8")
 
-def _get_encoded(base: str, fmt: Literal["png","svg","txt"], encoded: str) -> Optional[requests.Response]:
-    if not base:
-        return None
-    url = f"{base}/uml/{fmt}/{encoded}"
-    headers = _build_headers(fmt)
-    log.info("GET %s", url)
-    try:
-        r = requests.get(url, headers=headers, timeout=TIMEOUT, allow_redirects=True)
-    except requests.RequestException as e:
-        log.info("GET error (%s): %s", url, e)
-        return None
-
-    log.info("UPSTREAM status=%s content-type=%s len=%s",
-             r.status_code, r.headers.get("Content-Type"), len(r.content))
-    if r.status_code != 200:
-        return None
-    if _is_html_response(r):
-        return None
-    return r
-
-def _post_raw(base: str, fmt: Literal["png","svg","txt"], code: str) -> Optional[requests.Response]:
-    if not base:
-        return None
-    url = f"{base}/uml/{fmt}"
-    headers = {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Accept": _accept_for(fmt),
-        "User-Agent": "sotiio-render/1.0",
-    }
-    log.info("POST %s (len=%d)", url, len(code))
-    try:
-        r = requests.post(url, data=code.encode("utf-8"),
-                          headers=headers, timeout=TIMEOUT,
-                          allow_redirects=True)
-    except requests.RequestException as e:
-        log.info("POST error (%s): %s", url, e)
-        return None
-
-    log.info("UPSTREAM(POST) status=%s content-type=%s len=%s",
-             r.status_code, r.headers.get("Content-Type"), len(r.content))
-    if r.status_code != 200:
-        return None
-    if _is_html_response(r):
-        return None
-    return r
-
-# ===== Endpoint =====
+# ---------- endpoint ----------
 
 @router.post("/render_pluntuml")
 def render_plantuml(
@@ -221,37 +278,45 @@ def render_plantuml(
     POST /render_pluntuml?fmt=png|svg|txt
     Body: {"code": "@startuml\\nAlice -> Bob: Hi\\n@enduml"}
     """
-    if fmt not in ("png", "svg", "txt"):
-        raise HTTPException(400, detail="format must be png/svg/txt")
     if not code or not code.strip():
         raise HTTPException(400, detail="Empty PlantUML code")
 
-    # 0) Разэкранируем управляющие последовательности и чистим невидимые
-    raw = _strip_invisibles(_unescape_backslashes(code))
-    log.info("CODE len=%d head=%r", len(raw), raw[:160].replace("\n", "\\n"))
+    # 0) Превращаем JSON-экранированные \\n в реальные переводы строки (вне кавычек)
+    raw = _unescape_backslashes(code)
+
+    log.info("CODE len=%d head=%r", len(raw), raw[:120].replace("\n", "\\n"))
 
     # 1) Нормализуем @startuml/@enduml
     normalized = _normalize_code(raw)
 
-    # 2) Сначала быстрый GET по короткому ID
+    # 2) Сначала POST (устойчивее для больших диаграмм)
+    for base in filter(None, [PLANTUML_URL, PLANTUML_ALT_URL]):
+        r = _try_post_then_follow(base, False, fmt, normalized)  # без /uml
+        if r is not None and not _is_html_response(r):
+            return _finish(fmt, r)
+        r = _try_post_then_follow(base, True, fmt, normalized)   # с /uml
+        if r is not None and not _is_html_response(r):
+            return _finish(fmt, r)
+
+    # 3) Затем GET /{fmt}/{encoded}
     try:
         encoded = plantuml_encode(normalized)
     except Exception as e:
         raise HTTPException(400, detail=f"Encode error: {e}")
 
     for base in filter(None, [PLANTUML_URL, PLANTUML_ALT_URL]):
-        r = _get_encoded(base, fmt, encoded)
-        if r:
+        r = _try_get_raw(base, False, fmt, encoded)   # без /uml
+        if r is not None and not _is_html_response(r):
+            return _finish(fmt, r)
+        r = _try_get_raw(base, True, fmt, encoded)    # с /uml
+        if r is not None and not _is_html_response(r):
             return _finish(fmt, r)
 
-    # 3) Затем POST (лучше для ОЧЕНЬ больших диаграмм/сетапов)
-    for base in filter(None, [PLANTUML_URL, PLANTUML_ALT_URL]):
-        r = _post_raw(base, fmt, normalized)
-        if r:
-            return _finish(fmt, r)
-
-    # 4) Всё плохо
+    # 4) Фолбэков нет — только твой локальный PlantUML
     raise HTTPException(
         502,
-        detail="PlantUML upstream error: GET/POST failed (no Kroki fallback).",
+        detail=(
+            "Upstream returned HTML UI or non-image for all attempts. "
+            "Проверь маршрутизацию PlantUML (включая /uml)."
+        ),
     )
