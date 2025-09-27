@@ -63,30 +63,10 @@ def plantuml_encode(uml: str) -> str:
 
 def _normalize_code(code: str) -> str:
     """
-    Упрощенная нормализация:
-    - Если код пустой - возвращаем как есть
-    - Если уже есть @startuml и @enduml - не трогаем
-    - Если есть @startuml но нет @enduml - добавляем
-    - В остальных случаях оборачиваем в @startuml/@enduml
+    Минимальная нормализация - только трим пробелов.
+    Сложные диаграммы с skinparam, ref, alt и т.д. отправляем как есть.
     """
-    s = code.strip()
-    if not s:
-        return s
-
-    has_startuml = "@startuml" in s.lower()
-    has_enduml = "@enduml" in s.lower()
-
-    if has_startuml and has_enduml:
-        return s
-
-    if has_startuml and not has_enduml:
-        return s + "\n@enduml"
-
-    # Если есть любой другой @startX маркер - не трогаем (это может быть mindmap, wbs и т.д.)
-    if re.search(r'@start\w+', s, re.IGNORECASE):
-        return s
-
-    return f"@startuml\n{s}\n@enduml"
+    return code.strip()
 
 def _looks_like_html_text(s: str) -> bool:
     t = s.lstrip().lower()
@@ -230,10 +210,12 @@ def render_plantuml(
     if not code or not code.strip():
         raise HTTPException(400, detail="Empty PlantUML code")
 
-    log.info("CODE len=%d head=%r", len(code), code[:120].replace("\n", "\\n"))
-
-    # Упрощенная нормализация - только базовые случаи
+    log.info("ORIGINAL CODE len=%d head=%r", len(code), repr(code[:200]))
+    
+    # Минимальная нормализация - только трим
     normalized = _normalize_code(code)
+    
+    log.info("NORMALIZED CODE len=%d head=%r", len(normalized), repr(normalized[:200]))
 
     try:
         encoded = plantuml_encode(normalized)
