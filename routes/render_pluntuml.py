@@ -17,10 +17,9 @@ KROKI_URL = os.getenv("KROKI_URL", "").strip().rstrip("/")                # оп
 CONNECT_TIMEOUT = 10
 READ_TIMEOUT = 60
 TIMEOUT = (CONNECT_TIMEOUT, READ_TIMEOUT)
-ERR_PREVIEW = 800
 
 # ---------- helpers ----------
-START_RE = re.compile(r"(?im)^\s*@start([a-z0-9_+-]+)\b")
+
 def _accept_for(fmt: Literal["png","svg","txt"]) -> str:
     return "image/png" if fmt == "png" else ("image/svg+xml" if fmt == "svg" else "text/plain; charset=utf-8")
 
@@ -64,24 +63,39 @@ def plantuml_encode(uml: str) -> str:
     return ''.join(out)
 
 def _normalize_code(code: str) -> str:
-    """Гарантируем валидную диаграмму: добавим/закроем маркеры при необходимости."""
+    """
+    Упрощенная нормализация:
+    - Если код пустой - возвращаем как есть
+    - Если уже есть @startuml и @enduml - не трогаем
+    - Если есть @startuml но нет @enduml - добавляем
+    - В остальных случаях оборачиваем в @startuml/@enduml
+    - Если есть любой другой @startX (mindmap, wbs, ...) — не трогаем
+    """
     s = code.strip()
     if not s:
         return s
-    m = START_RE.search(s)
-    if m:
-        kind = m.group(1)  # uml, mindmap, wbs, etc.
-        end_re = re.compile(rf"(?im)^\s*@end{re.escape(kind)}\b")
-        if end_re.search(s):
-            return s
-        # есть @startX, нет конца — добавим
-        return s + f"\n@end{kind}"
-    # нет стартового маркера — обернём в @startuml/@enduml
+
+    has_startuml = "@startuml" in s.lower()
+    has_enduml = "@enduml" in s.lower()
+
+    if has_startuml and has_enduml:
+        return s
+
+    if has_startuml and not has_enduml:
+        return s + "\n@enduml"
+
+    if re.search(r'@start\w+', s, re.IGNORECASE):
+        return s
+
     return f"@startuml\n{s}\n@enduml"
 
 def _looks_like_html_text(s: str) -> bool:
     t = s.lstrip().lower()
     return t.startswith("<!doctype") or t.startswith("<html")
+
+def _is_html_response(resp: requests.Response) -> bool:
+    ct = (resp.headers.get("Content-Type") or "").lower()
+    return "text/html" in ct
 
 def _build_headers(fmt: Literal["png","svg","txt"]) -> dict:
     return {
@@ -91,6 +105,16 @@ def _build_headers(fmt: Literal["png","svg","txt"]) -> dict:
         "X-Requested-With": "XMLHttpRequest",
         "User-Agent": "sotiio-render/1.0",
     }
+
+def _unescape_backslashes(s: str) -> str:
+    # Превращаем JSON-экранировки в реальные символы
+    # Важно: не используем json.loads тут сознательно
+    return (
+        s.replace("\\r\\n", "\n")
+         .replace("\\n", "\n")
+         .replace("\\t", "\t")
+         .replace("\\r", "\n")
+    )
 
 def _try_get_raw(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], encoded: str) -> Optional[requests.Response]:
     if not base:
@@ -125,7 +149,9 @@ def _try_get_raw(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], enco
         return None
     if fmt == "txt" and _looks_like_html_text(r.text):
         return None
-    return r  # для png/svg не доверяем Content-Type — просто берём bytes
+    if _is_html_response(r):
+        return None
+    return r
 
 def _try_post_then_follow(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], code: str) -> Optional[requests.Response]:
     if not base:
@@ -144,10 +170,16 @@ def _try_post_then_follow(base: str, use_ctx: bool, fmt: Literal["png","svg","tx
         log.info("POST error (%s): %s", post_url, e)
         return None
 
+    # Прямой 200 — проверяем, что это не HTML
+    if resp.status_code == 200:
+        if fmt == "txt" and _looks_like_html_text(resp.text):
+            return None
+        if _is_html_response(resp):
+            return None
+        return resp
+
+    # Если редирект, пытаемся забрать диаграмму GET-ом по итоговому URL
     if resp.status_code not in (301, 302, 303) or not resp.headers.get("Location"):
-        if resp.status_code == 200:
-            if fmt != "txt" or not _looks_like_html_text(resp.text):
-                return resp
         return None
 
     loc = resp.headers["Location"]
@@ -178,6 +210,8 @@ def _try_post_then_follow(base: str, use_ctx: bool, fmt: Literal["png","svg","tx
         return None
     if fmt == "txt" and _looks_like_html_text(r.text):
         return None
+    if _is_html_response(r):
+        return None
     return r
 
 def _try_kroki(fmt: Literal["png","svg","txt"], code: str) -> Optional[requests.Response]:
@@ -199,6 +233,8 @@ def _try_kroki(fmt: Literal["png","svg","txt"], code: str) -> Optional[requests.
         return None
     if fmt == "txt" and _looks_like_html_text(r.text):
         return None
+    if _is_html_response(r):
+        return None
     return r
 
 def _finish(fmt: Literal["png","svg","txt"], resp: requests.Response) -> Response:
@@ -209,6 +245,7 @@ def _finish(fmt: Literal["png","svg","txt"], resp: requests.Response) -> Respons
     return Response(content=resp.text, media_type="text/plain; charset=utf-8")
 
 # ---------- endpoint ----------
+
 @router.post("/render_pluntuml")
 def render_plantuml(
     fmt: Literal["png","svg","txt"],
@@ -216,49 +253,51 @@ def render_plantuml(
 ):
     """
     POST /render_pluntuml?fmt=png|svg|txt
-    Body: {"code": "@startuml\\nAlice -> Bob: Hi\\n@enduml"}  # маркеры можно опустить — мы добавим
+    Body: {"code": "@startuml\\nAlice -> Bob: Hi\\n@enduml"}
     """
     if not code or not code.strip():
         raise HTTPException(400, detail="Empty PlantUML code")
 
-    # Лог для отладки входа
-    log.info("CODE len=%d head=%r", len(code), code[:120].replace("\n", "\\n"))
+    # 0) Превращаем JSON-экранированные \\n в реальные переводы строки
+    raw = _unescape_backslashes(code)
 
-    # 0) Нормализуем: добавим маркеры при необходимости/закроем незакрытый @endX
-    normalized = _normalize_code(code)
+    log.info("CODE len=%d head=%r", len(raw), raw[:120].replace("\n", "\\n"))
 
+    # 1) Нормализуем маркеры @startuml/@enduml (идемпотентно)
+    normalized = _normalize_code(raw)
+
+    # 2) Сначала пробуем POST (устойчивее для больших диаграмм)
+    for base in filter(None, [PLANTUML_URL, PLANTUML_ALT_URL]):
+        r = _try_post_then_follow(base, False, fmt, normalized)  # без /uml
+        if r is not None and not _is_html_response(r):
+            return _finish(fmt, r)
+        r = _try_post_then_follow(base, True, fmt, normalized)   # с /uml
+        if r is not None and not _is_html_response(r):
+            return _finish(fmt, r)
+
+    # 3) Затем GET /{fmt}/{encoded} (если POST не помог)
     try:
         encoded = plantuml_encode(normalized)
     except Exception as e:
         raise HTTPException(400, detail=f"Encode error: {e}")
 
-    # 1) GET raw: сначала БЕЗ /uml, затем С /uml (так быстрее обходим UI-серверы)
     for base in filter(None, [PLANTUML_URL, PLANTUML_ALT_URL]):
         r = _try_get_raw(base, False, fmt, encoded)   # без /uml
-        if r is not None:
+        if r is not None and not _is_html_response(r):
             return _finish(fmt, r)
         r = _try_get_raw(base, True, fmt, encoded)    # с /uml
-        if r is not None:
+        if r is not None and not _is_html_response(r):
             return _finish(fmt, r)
 
-    # 2) POST → Location → GET (без /uml, затем с /uml)
-    for base in filter(None, [PLANTUML_URL, PLANTUML_ALT_URL]):
-        r = _try_post_then_follow(base, False, fmt, normalized)
-        if r is not None:
-            return _finish(fmt, r)
-        r = _try_post_then_follow(base, True, fmt, normalized)
-        if r is not None:
-            return _finish(fmt, r)
-
-    # 3) Фолбэк Kroki
+    # 4) Фолбэк Kroki
     r = _try_kroki(fmt, normalized)
-    if r is not None:
+    if r is not None and not _is_html_response(r):
         return _finish(fmt, r)
 
     raise HTTPException(
         502,
         detail=(
-            "Upstream returned HTML UI instead of raw diagram for all attempts. "
-            "Check PlantUML server routing or set KROKI_URL."
+            "Upstream returned HTML UI or non-image for all attempts. "
+            "Проверь маршрутизацию PlantUML (включая /uml) или укажи KROKI_URL."
         ),
     )
