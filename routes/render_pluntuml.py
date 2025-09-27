@@ -3,43 +3,40 @@
 
 from fastapi import APIRouter, HTTPException, Body, Response
 import os, zlib, logging, requests, re
-from typing import Literal, Optional, Dict, Tuple
+from typing import Literal, Optional
 from urllib.parse import urljoin, urlparse
 
 router = APIRouter()
 log = logging.getLogger("plantuml")
 
-# Базовые адреса
+# Базовые адреса (можно без /uml — код сам попробует оба варианта)
 PLANTUML_URL = os.getenv("PLANTUML_URL", "https://my-pluntuml.onrender.com").strip().rstrip("/")
-PLANTUML_ALT_URL = os.getenv("PLANTUML_ALT_URL", "").strip().rstrip("/")
-KROKI_URL = os.getenv("KROKI_URL", "").strip().rstrip("/")
+PLANTUML_ALT_URL = os.getenv("PLANTUML_ALT_URL", "").strip().rstrip("/")  # опция
+KROKI_URL = os.getenv("KROKI_URL", "").strip().rstrip("/")                # опция (напр., https://kroki.io)
 
 CONNECT_TIMEOUT = 10
-READ_TIMEOUT   = 60
+READ_TIMEOUT = 60
 TIMEOUT = (CONNECT_TIMEOUT, READ_TIMEOUT)
-
-# Всегда работаем только под /uml (устраняем 400 без /uml)
-ONLY_CTX = True
-
-# Кеш удачных маршрутов на процесс: fmt -> base
-_ROUTE_CACHE: Dict[str, str] = {}
 
 # ---------- helpers ----------
 
 def _accept_for(fmt: Literal["png","svg","txt"]) -> str:
-    return "*/*"  # некоторые инстансы капризничают на узкие Accept
+    return "image/png" if fmt == "png" else ("image/svg+xml" if fmt == "svg" else "text/plain; charset=utf-8")
 
-def _ensure_with_ctx(base: str) -> str:
+def _ensure_with_ctx(base: str, ctx: bool) -> str:
     if not base:
         return ""
-    return base if base.endswith("/uml") else base + "/uml"
+    if ctx:
+        return base if base.endswith("/uml") else base + "/uml"
+    else:
+        return base[:-4] if base.endswith("/uml") else base
 
 def _encode6bit(b: int) -> str:
-    if b < 10:  return chr(48 + b)
+    if b < 10:  return chr(48 + b)   # 0-9
     b -= 10
-    if b < 26: return chr(65 + b)
+    if b < 26: return chr(65 + b)   # A-Z
     b -= 26
-    if b < 26: return chr(97 + b)
+    if b < 26: return chr(97 + b)   # a-z
     b -= 26
     return "-" if b == 0 else "_"
 
@@ -66,17 +63,30 @@ def plantuml_encode(uml: str) -> str:
     return ''.join(out)
 
 def _normalize_code(code: str) -> str:
+    """
+    Упрощенная нормализация:
+    - Если код пустой - возвращаем как есть
+    - Если уже есть @startuml и @enduml - не трогаем
+    - Если есть @startuml но нет @enduml - добавляем
+    - В остальных случаях оборачиваем в @startuml/@enduml
+    - Если есть любой другой @startX (mindmap, wbs, ...) — не трогаем
+    """
     s = code.strip()
     if not s:
         return s
+
     has_startuml = "@startuml" in s.lower()
-    has_enduml   = "@enduml" in s.lower()
+    has_enduml = "@enduml" in s.lower()
+
     if has_startuml and has_enduml:
         return s
+
     if has_startuml and not has_enduml:
         return s + "\n@enduml"
+
     if re.search(r'@start\w+', s, re.IGNORECASE):
         return s
+
     return f"@startuml\n{s}\n@enduml"
 
 def _looks_like_html_text(s: str) -> bool:
@@ -92,10 +102,13 @@ def _build_headers(fmt: Literal["png","svg","txt"]) -> dict:
         "Accept": _accept_for(fmt),
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
+        "X-Requested-With": "XMLHttpRequest",
         "User-Agent": "sotiio-render/1.0",
     }
 
 def _unescape_backslashes(s: str) -> str:
+    # Превращаем JSON-экранировки в реальные символы
+    # Важно: не используем json.loads тут сознательно
     return (
         s.replace("\\r\\n", "\n")
          .replace("\\n", "\n")
@@ -103,18 +116,11 @@ def _unescape_backslashes(s: str) -> str:
          .replace("\\r", "\n")
     )
 
-def _bases_ctx() -> Tuple[str, ...]:
-    cand = []
-    for b in (PLANTUML_URL, PLANTUML_ALT_URL):
-        if not b:
-            continue
-        cand.append(_ensure_with_ctx(b))
-    # Удаляем дубли при одинаковых PLANTUML_URL/ALT
-    dedup = tuple(dict.fromkeys(cand).keys())
-    return dedup
-
-def _try_get_raw(root_ctx: str, fmt: Literal["png","svg","txt"], encoded: str) -> Optional[requests.Response]:
-    url = f"{root_ctx}/{fmt}/{encoded}"
+def _try_get_raw(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], encoded: str) -> Optional[requests.Response]:
+    if not base:
+        return None
+    root = _ensure_with_ctx(base, use_ctx)
+    url = f"{root}/{fmt}/{encoded}"
     headers = _build_headers(fmt)
     log.info("GET %s", url)
     try:
@@ -124,8 +130,8 @@ def _try_get_raw(root_ctx: str, fmt: Literal["png","svg","txt"], encoded: str) -
         return None
 
     status = r.status_code
-    log.info("UPSTREAM status=%s content-type=%s len=%s",
-             status, (r.headers.get("Content-Type") or ""), len(r.content))
+    ctype = (r.headers.get("Content-Type") or "")
+    log.info("UPSTREAM status=%s content-type=%s len=%s", status, ctype, len(r.content))
 
     if status in (301, 302, 303, 307, 308) and r.headers.get("Location"):
         redir = urljoin(url, r.headers["Location"])
@@ -133,22 +139,25 @@ def _try_get_raw(root_ctx: str, fmt: Literal["png","svg","txt"], encoded: str) -
         try:
             r = requests.get(redir, headers=headers, timeout=TIMEOUT, allow_redirects=False)
             status = r.status_code
-            log.info("UPSTREAM(redirect) status=%s content-type=%s len=%s",
-                     status, (r.headers.get("Content-Type") or ""), len(r.content))
+            ctype = (r.headers.get("Content-Type") or "")
+            log.info("UPSTREAM(redirect) status=%s content-type=%s len=%s", status, ctype, len(r.content))
         except requests.RequestException as e:
             log.info("Redirect GET error (%s): %s", redir, e)
             return None
 
     if status != 200:
         return None
-    if fmt == "txt" and _looks_like_html_text(getattr(r, "text", "")):
+    if fmt == "txt" and _looks_like_html_text(r.text):
         return None
     if _is_html_response(r):
         return None
     return r
 
-def _try_post_then_follow(root_ctx: str, fmt: Literal["png","svg","txt"], code: str) -> Optional[requests.Response]:
-    post_url = f"{root_ctx}/{fmt}"
+def _try_post_then_follow(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], code: str) -> Optional[requests.Response]:
+    if not base:
+        return None
+    root = _ensure_with_ctx(base, use_ctx)
+    post_url = f"{root}/{fmt}"
     headers = {
         "Content-Type": "text/plain; charset=utf-8",
         "Accept": _accept_for(fmt),
@@ -156,12 +165,12 @@ def _try_post_then_follow(root_ctx: str, fmt: Literal["png","svg","txt"], code: 
     }
     log.info("POST %s (len=%d)", post_url, len(code))
     try:
-        resp = requests.post(post_url, data=code.encode("utf-8"), headers=headers,
-                             timeout=TIMEOUT, allow_redirects=False)
+        resp = requests.post(post_url, data=code.encode("utf-8"), headers=headers, timeout=TIMEOUT, allow_redirects=False)
     except requests.RequestException as e:
         log.info("POST error (%s): %s", post_url, e)
         return None
 
+    # Прямой 200 — проверяем, что это не HTML
     if resp.status_code == 200:
         if fmt == "txt" and _looks_like_html_text(resp.text):
             return None
@@ -169,6 +178,7 @@ def _try_post_then_follow(root_ctx: str, fmt: Literal["png","svg","txt"], code: 
             return None
         return resp
 
+    # Если редирект, пытаемся забрать диаграмму GET-ом по итоговому URL
     if resp.status_code not in (301, 302, 303) or not resp.headers.get("Location"):
         return None
 
@@ -177,7 +187,10 @@ def _try_post_then_follow(root_ctx: str, fmt: Literal["png","svg","txt"], code: 
     parsed = urlparse(abs_loc)
     path = parsed.path
     marker = "/uml/"
-    tail = path.split(marker, 1)[1] if marker in path else (path[1:] if path.startswith("/") else path)
+    if marker in path:
+        tail = path.split(marker, 1)[1]
+    else:
+        tail = path[1:] if path.startswith("/") else path
 
     if "/" in tail:
         head, maybe_id = tail.split("/", 1)
@@ -185,7 +198,7 @@ def _try_post_then_follow(root_ctx: str, fmt: Literal["png","svg","txt"], code: 
     else:
         id_part = tail
 
-    get_url = f"{root_ctx}/{fmt}/{id_part}"
+    get_url = f"{root}/{fmt}/{id_part}"
     log.info("FOLLOW as GET %s", get_url)
     try:
         r = requests.get(get_url, headers=_build_headers(fmt), timeout=TIMEOUT, allow_redirects=False)
@@ -245,59 +258,46 @@ def render_plantuml(
     if not code or not code.strip():
         raise HTTPException(400, detail="Empty PlantUML code")
 
+    # 0) Превращаем JSON-экранированные \\n в реальные переводы строки
     raw = _unescape_backslashes(code)
-    log.info("CODE len=%d head=%r", len(raw), raw[:140].replace("\n", "\\n"))
+
+    log.info("CODE len=%d head=%r", len(raw), raw[:120].replace("\n", "\\n"))
+
+    # 1) Нормализуем маркеры @startuml/@enduml (идемпотентно)
     normalized = _normalize_code(raw)
 
-    # Собираем кандидаты base (только /uml)
-    bases = _bases_ctx()
-    # Если есть кеш для формата — ставим его первым
-    cached = _ROUTE_CACHE.get(fmt)
-    if cached:
-        bases = tuple([cached] + [b for b in bases if b != cached])
-
-    # txt: только GET /uml/txt/{encoded}
-    if fmt == "txt":
-        try:
-            encoded = plantuml_encode(normalized)
-        except Exception as e:
-            raise HTTPException(400, detail=f"Encode error: {e}")
-        for root in bases:
-            r = _try_get_raw(root, fmt, encoded)
-            if r is not None:
-                _ROUTE_CACHE[fmt] = root
-                return _finish(fmt, r)
-
-        # Kroki-фолбэк
-        r = _try_kroki(fmt, normalized)
-        if r is not None:
+    # 2) Сначала пробуем POST (устойчивее для больших диаграмм)
+    for base in filter(None, [PLANTUML_URL, PLANTUML_ALT_URL]):
+        r = _try_post_then_follow(base, False, fmt, normalized)  # без /uml
+        if r is not None and not _is_html_response(r):
+            return _finish(fmt, r)
+        r = _try_post_then_follow(base, True, fmt, normalized)   # с /uml
+        if r is not None and not _is_html_response(r):
             return _finish(fmt, r)
 
-        raise HTTPException(502, detail="PlantUML txt failed via GET(/uml) and Kroki.")
-
-    # png/svg: сначала POST /uml/{fmt}, затем GET /uml/{fmt}/{encoded}
-    for root in bases:
-        r = _try_post_then_follow(root, fmt, normalized)
-        if r is not None:
-            _ROUTE_CACHE[fmt] = root
-            return _finish(fmt, r)
-
+    # 3) Затем GET /{fmt}/{encoded} (если POST не помог)
     try:
         encoded = plantuml_encode(normalized)
     except Exception as e:
         raise HTTPException(400, detail=f"Encode error: {e}")
 
-    for root in bases:
-        r = _try_get_raw(root, fmt, encoded)
-        if r is not None:
-            _ROUTE_CACHE[fmt] = root
+    for base in filter(None, [PLANTUML_URL, PLANTUML_ALT_URL]):
+        r = _try_get_raw(base, False, fmt, encoded)   # без /uml
+        if r is not None and not _is_html_response(r):
+            return _finish(fmt, r)
+        r = _try_get_raw(base, True, fmt, encoded)    # с /uml
+        if r is not None and not _is_html_response(r):
             return _finish(fmt, r)
 
+    # 4) Фолбэк Kroki
     r = _try_kroki(fmt, normalized)
-    if r is not None:
+    if r is not None and not _is_html_response(r):
         return _finish(fmt, r)
 
     raise HTTPException(
         502,
-        detail="Upstream returned HTML UI or non-image for all attempts under /uml. Проверь KROKI_URL или инстанс PlantUML.",
+        detail=(
+            "Upstream returned HTML UI or non-image for all attempts. "
+            "Проверь маршрутизацию PlantUML (включая /uml) или укажи KROKI_URL."
+        ),
     )
