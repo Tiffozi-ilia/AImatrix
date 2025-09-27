@@ -10,7 +10,7 @@ router = APIRouter()
 log = logging.getLogger("plantuml")
 
 # Базовые адреса (можно без /uml — код сам попробует оба варианта)
-PLANTUML_URL = os.getenv("PLANTUML_URL", "https://my-pluntuml.onrender.com").strip().rstrip("/")
+PLANTUML_URL = os.getenv("PLANTUML_URL", "https://my-pluntuml.onrender.com/uml").strip().rstrip("/")
 PLANTUML_ALT_URL = os.getenv("PLANTUML_ALT_URL", "").strip().rstrip("/")  # опция
 KROKI_URL = os.getenv("KROKI_URL", "").strip().rstrip("/")                # опция (напр., https://kroki.io)
 
