@@ -101,66 +101,6 @@ def _build_headers(fmt: Literal["png","svg","txt"]) -> dict:
         "User-Agent": "sotiio-render/1.0",
     }
 
-def _unescape_backslashes(s: str) -> str:
-    """
-    Разэкранируем \\r\\n, \\n, \\r, \\t ТОЛЬКО ВНЕ двойных кавычек.
-    Внутри "..." оставляем \\n как литерал — PlantUML сам превратит его в перенос строки.
-    """
-    out = []
-    i = 0
-    n = len(s)
-    in_str = False  # внутри двойных кавычек
-    while i < n:
-        ch = s[i]
-
-        # отслеживаем вход/выход из строки с учётом экранирования кавычек
-        if ch == '"':
-            # считаем количество обратных слэшей перед кавычкой
-            bs = 0
-            j = i - 1
-            while j >= 0 and s[j] == '\\':
-                bs += 1
-                j -= 1
-            if bs % 2 == 0:  # неэкранированная кавычка
-                in_str = not in_str
-            out.append(ch)
-            i += 1
-            continue
-
-        # вне строк — разэкранируем управляющие последовательности
-        if not in_str and ch == '\\' and i + 1 < n:
-            nxt = s[i + 1]
-            # \r\n
-            if nxt == 'r' and i + 3 < n and s[i + 2] == '\\' and s[i + 3] == 'n':
-                out.append('\r\n')
-                i += 4
-                continue
-            # \n
-            if nxt == 'n':
-                out.append('\n')
-                i += 2
-                continue
-            # \r
-            if nxt == 'r':
-                out.append('\r')
-                i += 2
-                continue
-            # \t
-            if nxt == 't':
-                out.append('\t')
-                i += 2
-                continue
-            # прочее — оставить как есть
-            out.append(ch)
-            i += 1
-            continue
-
-        # по умолчанию — копируем символ
-        out.append(ch)
-        i += 1
-
-    return ''.join(out)
-
 def _try_get_raw(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], encoded: str) -> Optional[requests.Response]:
     if not base:
         return None
@@ -305,8 +245,9 @@ def render_plantuml(
     if not code or not code.strip():
         raise HTTPException(400, detail="Empty PlantUML code")
 
-    # 0) Превращаем JSON-экранированные \\n в реальные переводы строки (вне кавычек)
-    raw = _unescape_backslashes(code)
+    # FastAPI автоматически разэкранирует JSON, поэтому code уже содержит нормальные \n
+    # НЕ нужно делать дополнительную обработку - это сломает строки в кавычках!
+    raw = code
 
     log.info("CODE len=%d head=%r", len(raw), raw[:120].replace("\n", "\\n"))
 
@@ -345,6 +286,6 @@ def render_plantuml(
         502,
         detail=(
             "Upstream returned HTML UI or non-image for all attempts. "
-            "Проверь маршрутизацию PlantUML (включая /uml) или укажи KROKI_URL."
+            "Check PlantUML server routing or set KROKI_URL."
         ),
     )
