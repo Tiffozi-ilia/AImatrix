@@ -64,29 +64,24 @@ def plantuml_encode(uml: str) -> str:
 
 def _normalize_code(code: str) -> str:
     """
-    Упрощенная нормализация:
-    - Если код пустой - возвращаем как есть
-    - Если уже есть @startuml и @enduml - не трогаем
-    - Если есть @startuml но нет @enduml - добавляем
-    - В остальных случаях оборачиваем в @startuml/@enduml
-    - Если есть любой другой @startX (mindmap, wbs, ...) — не трогаем
+    Нормализация:
+    - Пустой: вернуть как есть
+    - Есть @startuml и @enduml: не трогаем
+    - Есть @startuml без @enduml: дописываем
+    - Есть @startX (mindmap, wbs, ...): не трогаем
+    - Иначе: оборачиваем в @startuml/@enduml
     """
     s = code.strip()
     if not s:
         return s
 
-    has_startuml = "@startuml" in s.lower()
-    has_enduml = "@enduml" in s.lower()
-
-    if has_startuml and has_enduml:
+    low = s.lower()
+    if "@startuml" in low and "@enduml" in low:
         return s
-
-    if has_startuml and not has_enduml:
+    if "@startuml" in low and "@enduml" not in low:
         return s + "\n@enduml"
-
     if re.search(r'@start\w+', s, re.IGNORECASE):
         return s
-
     return f"@startuml\n{s}\n@enduml"
 
 def _looks_like_html_text(s: str) -> bool:
@@ -107,14 +102,64 @@ def _build_headers(fmt: Literal["png","svg","txt"]) -> dict:
     }
 
 def _unescape_backslashes(s: str) -> str:
-    # Превращаем JSON-экранировки в реальные символы
-    # Важно: не используем json.loads тут сознательно
-    return (
-        s.replace("\\r\\n", "\n")
-         .replace("\\n", "\n")
-         .replace("\\t", "\t")
-         .replace("\\r", "\n")
-    )
+    """
+    Разэкранируем \\r\\n, \\n, \\r, \\t ТОЛЬКО ВНЕ двойных кавычек.
+    Внутри "..." оставляем \\n как литерал — PlantUML сам превратит его в перенос строки.
+    """
+    out = []
+    i = 0
+    n = len(s)
+    in_str = False  # внутри двойных кавычек
+    while i < n:
+        ch = s[i]
+
+        # отслеживаем вход/выход из строки с учётом экранирования кавычек
+        if ch == '"':
+            # считаем количество обратных слэшей перед кавычкой
+            bs = 0
+            j = i - 1
+            while j >= 0 and s[j] == '\\':
+                bs += 1
+                j -= 1
+            if bs % 2 == 0:  # неэкранированная кавычка
+                in_str = not in_str
+            out.append(ch)
+            i += 1
+            continue
+
+        # вне строк — разэкранируем управляющие последовательности
+        if not in_str and ch == '\\' and i + 1 < n:
+            nxt = s[i + 1]
+            # \r\n
+            if nxt == 'r' and i + 3 < n and s[i + 2] == '\\' and s[i + 3] == 'n':
+                out.append('\r\n')
+                i += 4
+                continue
+            # \n
+            if nxt == 'n':
+                out.append('\n')
+                i += 2
+                continue
+            # \r
+            if nxt == 'r':
+                out.append('\r')
+                i += 2
+                continue
+            # \t
+            if nxt == 't':
+                out.append('\t')
+                i += 2
+                continue
+            # прочее — оставить как есть
+            out.append(ch)
+            i += 1
+            continue
+
+        # по умолчанию — копируем символ
+        out.append(ch)
+        i += 1
+
+    return ''.join(out)
 
 def _try_get_raw(base: str, use_ctx: bool, fmt: Literal["png","svg","txt"], encoded: str) -> Optional[requests.Response]:
     if not base:
@@ -178,7 +223,7 @@ def _try_post_then_follow(base: str, use_ctx: bool, fmt: Literal["png","svg","tx
             return None
         return resp
 
-    # Расширенный набор ответов, которые считаем "редиректом по Location"
+    # Принимаем редирект-подобные ответы: 301/302/303/307/308 и 201/202 с Location
     redirect_like = (301, 302, 303, 307, 308, 201, 202)
     if resp.status_code in redirect_like and resp.headers.get("Location"):
         loc = resp.headers["Location"]
@@ -213,7 +258,7 @@ def _try_post_then_follow(base: str, use_ctx: bool, fmt: Literal["png","svg","tx
             return None
         return r
 
-    # Любой иной ответ считаем неуспешным для этой попытки
+    # Иное — неуспех
     return None
 
 def _try_kroki(fmt: Literal["png","svg","txt"], code: str) -> Optional[requests.Response]:
@@ -260,15 +305,15 @@ def render_plantuml(
     if not code or not code.strip():
         raise HTTPException(400, detail="Empty PlantUML code")
 
-    # 0) Превращаем JSON-экранированные \\n в реальные переводы строки
+    # 0) Превращаем JSON-экранированные \\n в реальные переводы строки (вне кавычек)
     raw = _unescape_backslashes(code)
 
     log.info("CODE len=%d head=%r", len(raw), raw[:120].replace("\n", "\\n"))
 
-    # 1) Нормализуем маркеры @startuml/@enduml (идемпотентно)
+    # 1) Нормализуем @startuml/@enduml
     normalized = _normalize_code(raw)
 
-    # 2) Сначала пробуем POST (устойчивее для больших диаграмм)
+    # 2) Сначала POST (устойчивее для больших диаграмм)
     for base in filter(None, [PLANTUML_URL, PLANTUML_ALT_URL]):
         r = _try_post_then_follow(base, False, fmt, normalized)  # без /uml
         if r is not None and not _is_html_response(r):
@@ -277,7 +322,7 @@ def render_plantuml(
         if r is not None and not _is_html_response(r):
             return _finish(fmt, r)
 
-    # 3) Затем GET /{fmt}/{encoded} (если POST не помог)
+    # 3) Затем GET /{fmt}/{encoded}
     try:
         encoded = plantuml_encode(normalized)
     except Exception as e:
