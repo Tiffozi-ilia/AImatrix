@@ -281,6 +281,10 @@ def render_plantuml(
     if not code or not code.strip():
         raise HTTPException(400, detail="Empty PlantUML code")
 
+    # Удаляем экранирование кавычек, если они есть
+    if '"' in code:
+        code = code.replace('\\"', '"')
+
     # 0) Превращаем JSON-экранированные \\n в реальные переводы строки (вне кавычек)
     raw = _unescape_backslashes(code)
 
