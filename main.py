@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routes import json_export, md_full, md_clean, md_clean_cut, md_clean_single, md_clean_depth, md_tree_depth, md_clean_multiple, zip_export, csv_export, excel_export, opml_export, mm_export, xmind_export, pyrus_upload, xmind_procedures, generate_kpi, xmind_sync_github, update_parent_names, api_ping, download_files, upload_files_pyrus, download_files_pyrus, render_pluntuml, render_plantuml_yaml
+from routes import json_export, md_full, md_clean, md_clean_cut, md_clean_single, md_clean_depth, md_tree_depth, md_clean_multiple, zip_export, csv_export, excel_export, opml_export, mm_export, xmind_export, pyrus_upload, xmind_procedures, generate_kpi, xmind_sync_github, update_parent_names, api_ping, download_files, upload_files_pyrus, download_files_pyrus, render_pluntuml, render_plantuml_yaml, json_n8n_tree
 from routes.call_pyrus_upload import router as call_pyrus_upload_router
 from routes.call_pyrus_upload import router as call_pyrus_upload_router
 
@@ -31,3 +31,4 @@ app.include_router(upload_files_pyrus.router)
 app.include_router(download_files_pyrus.router)
 app.include_router(render_pluntuml.router)
 app.include_router(render_plantuml_yaml.router)
+app.include_router(json_n8n_tree.router)
