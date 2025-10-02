@@ -1,74 +1,28 @@
-# -*- coding: utf-8 -*-
 from fastapi import APIRouter, Query
 from fastapi.responses import FileResponse
 import pandas as pd
 import openpyxl
-from openpyxl.styles import Font, numbers
+from openpyxl.styles import Font
 from copy import copy
-import re
 
 router = APIRouter()
 
-# ---------------------------
-# ИСКЛЮЧЕНИЕ ДЛЯ J по ключу в E
-# ---------------------------
-# Ключевая фраза в названии KPI (колонка E)
-_EXC_KEYWORD = "Рост производительности на"
-
-# Базовая «уникальная» формула как будто в J10.
-# ВАЖНО: английская нотация, как и остальные формулы в коде.
-# Если понадобится другой расчёт — просто замени строку ниже.
-_EXC_J_BASE = "=IFERROR((G10/F10)*H10,0)"
-
-# Меняем только номер строки "10" во всех ссылках вида A10 / $B10 / 'Лист'!C10
-_CELL_REF_ROW_RE = re.compile(r"((?:'[^']+'!|[A-Za-zА-Яа-я0-9_]+!)?\$?[A-Z])10\b")
-
-def _row_adjust_j_formula(base: str, row_idx: int) -> str:
-    return _CELL_REF_ROW_RE.sub(lambda m: f"{m.group(1)}{row_idx}", base)
-
-def _apply_exception_formulas(
-    wb,
-    keyword: str = _EXC_KEYWORD,
-    base_formula: str = _EXC_J_BASE,
-    data_start_row: int = 7,
-    text_col: str = "E",
-    target_col: str = "J",
-) -> int:
-    """Точечно переписывает J{row} для строк, где E{row} содержит keyword."""
-    patched = 0
-    low_kw = keyword.lower()
-    for sh in wb.worksheets:
-        max_row = sh.max_row
-        for r in range(data_start_row, max_row + 1):
-            name = sh[f"{text_col}{r}"].value
-            if name and low_kw in str(name).lower():
-                j = sh[f"{target_col}{r}"]
-                j.value = _row_adjust_j_formula(base_formula, r)
-                j.number_format = numbers.FORMAT_PERCENTAGE_00
-                patched += 1
-    return patched
-
-# ---------------------------
-# ОСНОВНОЙ ЭНДПОЙНТ
-# ---------------------------
 @router.get("/generate_kpi")
 def generate_kpi_report(
-    year: int = Query(..., description="Год, например 2025"),
-    quarter: int = Query(..., ge=1, le=4, description="Квартал: 1–4"),
+    year: int = Query(..., alias="year", description="Год, например 2025"),
+    quarter: int = Query(..., ge=1, le=4, alias="quarter", description="Квартал: 1-4")
 ):
     quarters = {1: '1Q', 2: '2Q', 3: '3Q', 4: '4Q'}
-    report_df = pd.read_excel("KPI.xlsx", skiprows=6)                  # источник KPI
-    template_wb = openpyxl.load_workbook("EtalonKPI.xlsx")             # шаблон книги
-    template_sheet = template_wb.active                                 # эталонный лист
+    report_df = pd.read_excel("KPI.xlsx", skiprows=6)
+    template_wb = openpyxl.load_workbook("EtalonKPI.xlsx")
+    template_sheet = template_wb.active
 
-    # оставить как было — контроль «полноты квартала»
     def is_full_quarter(date, year, quarter):
         if pd.isna(date):
             return False
         quarter_start = pd.Timestamp(year=year, month=(quarter - 1) * 3 + 1, day=1)
         return pd.Timestamp(date) < quarter_start
 
-    # слепок стиля со строки 7 (B..K), чтобы переносить формат/формулы
     def extract_template_style(sheet, row_idx=7):
         style_template = {}
         for col in range(2, 12):
@@ -80,7 +34,7 @@ def generate_kpi_report(
                 "fill": copy(cell.fill),
                 "number_format": copy(cell.number_format),
                 "protection": copy(cell.protection),
-                "alignment": copy(cell.alignment),
+                "alignment": copy(cell.alignment)
             }
         return style_template
 
@@ -95,7 +49,6 @@ def generate_kpi_report(
             cell.protection = style["protection"]
             cell.alignment = style["alignment"]
 
-    # твоя сортировка приоритетов KPI (оставил как есть)
     def sort_key_strict(index, row):
         indicator = str(row[report_df.columns[15]])
         division = str(row[report_df.columns[3]])
@@ -136,27 +89,21 @@ def generate_kpi_report(
             else:
                 return (4, index)
 
-    positions_order = [
-        "Начальник", "Заместитель", "руководитель направления",
-        "главный бизнес-аналитик", "ведущий бизнес-аналитик", "бизнес-аналитик"
-    ]
+    positions_order = ["Начальник", "Заместитель", "руководитель направления",
+                       "главный бизнес-аналитик", "ведущий бизнес-аналитик", "бизнес-аналитик"]
 
-    # фильтр и сортировка сотрудников
-    filtered_df = report_df[
-        (report_df.iloc[:, 2] == "Работает") &
-        (report_df.iloc[:, 6] == year) &
-        (report_df.iloc[:, 7] == quarters[quarter]) &
-        (report_df.iloc[:, 5].apply(lambda d: is_full_quarter(d, year, quarter)))
-    ]
+    filtered_df = report_df[(report_df.iloc[:, 2] == "Работает") &
+                            (report_df.iloc[:, 6] == year) &
+                            (report_df.iloc[:, 7] == quarters[quarter]) &
+                            (report_df.iloc[:, 5].apply(lambda d: is_full_quarter(d, year, quarter)))]
+
     filtered_df["division_rank"] = filtered_df.iloc[:, 3].apply(lambda x: 0 if x == "Управление" else 1)
     filtered_df["position_rank"] = filtered_df.iloc[:, 4].apply(
-        lambda x: positions_order.index(x) if x in positions_order else len(positions_order)
-    )
+        lambda x: positions_order.index(x) if x in positions_order else len(positions_order))
     df_final = filtered_df.sort_values(by=["division_rank", filtered_df.columns[3], "position_rank"])
 
     style_template = extract_template_style(template_sheet)
 
-    # формирование листов по сотрудникам
     for name in df_final.iloc[:, 1].unique():
         new_sheet = template_wb.copy_worksheet(template_sheet)
         new_sheet.title = name[:31]
@@ -166,7 +113,7 @@ def generate_kpi_report(
         new_sheet["E3"] = f"KPI {quarter}Q{year}"
 
         df_person = df_final[df_final.iloc[:, 1] == name]
-        rows_with_index = list(enumerate(df_person.to_dict("records")))
+        rows_with_index = list(enumerate(df_person.to_dict('records')))
         sorted_rows = sorted(rows_with_index, key=lambda x: sort_key_strict(x[0], x[1]))
         start_row = 7
 
@@ -180,32 +127,28 @@ def generate_kpi_report(
             new_sheet[f"D{r}"] = kpi[report_df.columns[13]] / 100
             new_sheet[f"E{r}"] = kpi[report_df.columns[15]]
             new_sheet[f"F{r}"] = kpi[report_df.columns[16]]
-            new_sheet[f"F{r}"].number_format = "0"
+            new_sheet[f"F{r}"].number_format = '0'
             new_sheet[f"G{r}"] = kpi[report_df.columns[17]]
-            new_sheet[f"G{r}"].number_format = "0"
+            new_sheet[f"G{r}"].number_format = '0'
             new_sheet[f"H{r}"] = 1
-            new_sheet[f"H{r}"].number_format = "0%"
+            new_sheet[f"H{r}"].number_format = '0%'
 
-            # формулы I/J/K — как у тебя: берём из строки 7 и подменяем "7" на текущий r
-            # (оставляю поведение без изменений)
-            for col in ["I", "J", "K"]:
-                tpl = template_sheet[f"{col}7"].value
-                new_sheet[f"{col}{r}"] = tpl.replace("7", str(r)) if isinstance(tpl, str) else tpl  # :contentReference[oaicite:4]{index=4}
+            for col in ['I', 'J', 'K']:
+                new_sheet[f"{col}{r}"] = template_sheet[f"{col}7"].value.replace('7', str(r))
 
-            # шрифт Arial 9
             for col in range(2, 12):
-                new_sheet.cell(row=r, column=col).font = Font(name="Arial", size=9)
+                font9 = Font(name='Arial', size=9)
+                new_sheet.cell(row=r, column=col).font = font9
 
-        # «хвосты», итоги, подписи — как в твоём коде
         last_row = new_sheet.max_row
-        last_data_row = max([rr for rr in range(1, last_row + 1) if new_sheet[f"E{rr}"].value not in [None, ""]])
+        last_data_row = max([r for r in range(1, last_row + 1) if new_sheet[f'E{r}'].value not in [None, '']])
         new_sheet.delete_rows(last_data_row + 1, last_row - last_data_row)
 
         total_row = last_data_row + 1
         new_sheet[f"I{total_row}"] = f"=SUM(I{start_row}:I{last_data_row})"
-        new_sheet[f"I{total_row}"].number_format = "0%"
+        new_sheet[f"I{total_row}"].number_format = '0%'
         new_sheet[f"K{total_row}"] = f"=SUM(K{start_row}:K{last_data_row})"
-        new_sheet[f"K{total_row}"].number_format = "0%"
+        new_sheet[f"K{total_row}"].number_format = '0%'
 
         sign_row = total_row + 2
         full_name = name.strip().split()
@@ -213,21 +156,25 @@ def generate_kpi_report(
         new_sheet[f"B{sign_row}"] = short_name
         new_sheet[f"F{sign_row}"] = "Панарин А."
 
-    # удаляем шаблонный лист
     template_wb.remove(template_sheet)
 
-    # ------------- ПОСЛЕДНИЙ ШАГ: точечный патч J -------------
-    # ВНИМАНИЕ: здесь перезапишутся только J в строках,
-    # где в E встречается "Рост производительности на".
-    patched = _apply_exception_formulas(template_wb)
-    print(f"[KPI] Exception J-formulas applied: {patched}")
+    # ФИНАЛЬНЫЙ ШАГ: Поиск и замена формул для строк с "Рост производительности на"
+    for sheet_name in template_wb.sheetnames:
+        sheet = template_wb[sheet_name]
+        
+        # Ищем строки с фразой "Рост производительности на" в столбце E
+        for row in range(7, sheet.max_row + 1):
+            indicator_cell = sheet[f'E{row}']
+            if indicator_cell.value and "Рост производительности на" in str(indicator_cell.value):
+                # Заменяем формулу в столбце J для этой строки
+                target_cell = sheet[f'J{row}']
+                target_cell.value = f'=IF(G{row}>(F{row}+5),1.25, IF(G{row}>=(F{row}-5),1,IF(G{row}>100, 0.75,IF(G{row}>=75, 0.5, 0))))'
+                
+                # Обновляем формулу в столбце K (если нужно)
+                k_cell = sheet[f'K{row}']
+                k_cell.value = f'=I{row}*J{row}'
 
-    # сохраняем один итоговый файл и отдаём его
     output_path = "Output_KPI_Report.xlsx"
     template_wb.save(output_path)
 
-    return FileResponse(
-        output_path,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename="Output_KPI_Report.xlsx",
-    )
+    return FileResponse(output_path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename="Output_KPI_Report.xlsx")
