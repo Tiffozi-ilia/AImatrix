@@ -228,13 +228,13 @@ def export_json_n8n(
     )
 
 @router.get("/json_n8n_tree")
-def export_json_8n8_tree(
+def export_json_n8n_tree(
     root_id: Optional[str] = Query(None, description="id корневого узла для экспорта одной поддеревом"),
     depth: int = Query(-1, description="-1=всё вниз, 0=только root, N=уровни вниз")
 ):
     """
     Иерархический экспорт:
-    GET /json_8n8_tree?root_id=<ID>&depth=-1|0|1|2|...
+    GET /json_n8n_tree?root_id=<ID>&depth=-1|0|1|2|...
 
     Возвращает СТРУКТУРУ С ДЕРЕВОМ:
       - каждый объект имеет поля:
