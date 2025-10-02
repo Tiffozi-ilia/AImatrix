@@ -5,7 +5,67 @@ import openpyxl
 from openpyxl.styles import Font
 from copy import copy
 
+# --- NEW: imports for the final patch step ---
+import re
+from pathlib import Path
+from typing import Optional
+from openpyxl.styles import numbers
+
 router = APIRouter()
+
+# --- NEW: helpers for in-place J-formula patch ---
+_KPI_KEYWORD = "Рост производительности на"   # ищем в E{row}
+_TEXT_COL = "E"
+_FORMULA_COL = "J"
+_DATA_START_ROW = 7
+_SAMPLE_PATH = Path("Пример KPI_final.xlsx")  # берём J10 как «уникальную» формулу
+
+# меняем только номер строки "10" во всех ссылках вида A10 / $B10 / 'Лист'!C10
+_CELL_REF_ROW_RE = re.compile(r"((?:'[^']+'!|[A-Za-zА-Яа-я0-9_]+!)?\$?[A-Z])10\b")
+
+def _extract_base_formula_from_sample(sample_path: Path) -> Optional[str]:
+    if not sample_path.exists():
+        return None
+    wb = openpyxl.load_workbook(sample_path, data_only=False)
+    sh = wb.worksheets[0]
+    val = sh["J10"].value
+    wb.close()
+    return val if isinstance(val, str) and val.startswith("=") else None
+
+def _row_adjust_formula(base_formula: str, row_idx: int) -> str:
+    return _CELL_REF_ROW_RE.sub(lambda m: f"{m.group(1)}{row_idx}", base_formula)
+
+def _patch_kpi_formula_inplace(
+    wb,
+    keyword: str = _KPI_KEYWORD,
+    sample_path: Path = _Sample_PATH if '_Sample_PATH' in globals() else _SAMPLE_PATH,
+    text_col: str = _TEXT_COL,
+    target_col: str = _FORMULA_COL,
+    data_start_row: int = _DATA_START_ROW,
+) -> int:
+    """
+    Для строк, где E{row} содержит keyword, перезаписывает формулу в J{row}.
+    Возвращает количество изменённых ячеек.
+    """
+    base_formula = _extract_base_formula_from_sample(sample_path)
+    if not base_formula:
+        # фолбэк — замени при желании на свою «общую» формулу
+        base_formula = "=IFERROR((G10/F10)*H10,0)"
+
+    patched = 0
+    low_kw = keyword.lower()
+    for sh in wb.worksheets:
+        max_row = sh.max_row
+        for row in range(data_start_row, max_row + 1):
+            cell_text = sh[f"{text_col}{row}"].value
+            if cell_text and low_kw in str(cell_text).lower():
+                new_formula = _row_adjust_formula(base_formula, row)
+                cell = sh[f"{target_col}{row}"]
+                cell.value = new_formula
+                cell.number_format = numbers.FORMAT_PERCENTAGE_00
+                patched += 1
+    return patched
+# --- /NEW ---
 
 @router.get("/generate_kpi")
 def generate_kpi_report(
@@ -156,9 +216,19 @@ def generate_kpi_report(
         new_sheet[f"B{sign_row}"] = short_name
         new_sheet[f"F{sign_row}"] = "Панарин А."
 
+    # удаляем шаблонный лист из книги
     template_wb.remove(template_sheet)
 
+    # --- NEW: последний безопасный шаг — точечный патч J-формул по ключевому слову ---
+    patched_count = _patch_kpi_formula_inplace(template_wb)
+    print(f"[KPI] Patched J-cells by keyword '{_KPI_KEYWORD}': {patched_count}")
+
+    # сохраняем как раньше — один файл
     output_path = "Output_KPI_Report.xlsx"
     template_wb.save(output_path)
 
-    return FileResponse(output_path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename="Output_KPI_Report.xlsx")
+    return FileResponse(
+        output_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename="Output_KPI_Report.xlsx"
+    )
