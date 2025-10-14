@@ -162,14 +162,14 @@ def pick_roots(forest: List[Dict[str, Any]], root_id: Optional[str]) -> List[Dic
 
 # ---------- routes ----------
 
-@router.get("/json_n8n")
-def export_json_n8n(
+@router.get("/json_n8n_cib")
+def export_json_n8n_cib(
     root_id: Optional[str] = Query(None),
     depth: int = Query(-1, description="-1=всё вниз, 0=только root, N=уровни вниз")
 ):
     """
     Плоский экспорт (legacy):
-    GET /json_n8n?root_id=<ID>&depth=-1|0|1|2|...
+    GET /json_n8n_cib?root_id=<ID>&depth=-1|0|1|2|...
     Возвращает МАССИВ объектов без children:
       - item: "id:<id> - <title>"
       - data: словарь атрибутов
